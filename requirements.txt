@@ -1,0 +1,8 @@
+opencv-python
+Pillow
+spacy
+sentence_transformers
+scikit-learn
+transformers
+git+https://github.com/jebin2/custom_logger.git
+scenedetect[opencv]
