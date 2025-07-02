@@ -3,7 +3,6 @@ import cv2
 from PIL import Image
 import torch
 from sentence_transformers import SentenceTransformer, util
-import spacy
 import re
 import os
 from typing import List, Tuple, Dict, Optional
@@ -16,25 +15,34 @@ TEMP_DIR = "temp_dir"
 OUTPUT_JSON = f'{TEMP_DIR}/output.json'
 
 class TextFrameAligner:
-	def __init__(self, blip_model="Salesforce/blip-image-captioning-large", sentence_model='all-mpnet-base-v2'):
+	def __init__(self, blip_model_name="Salesforce/blip-image-captioning-large", sentence_model_name='all-mpnet-base-v2', clip_model_name="openai/clip-vit-large-patch14"):
 		self.device = "cuda" if torch.cuda.is_available() else "cpu"
 		logger_config.info("TextFrameAligner initialization started")
 		logger_config.info(f"Compute device selected: {self.device}")
 		
 		# Environment setup
-		os.environ["TORCH_USE_CUDA_DSA"] = "1"
-		os.environ["CUDA_LAUNCH_BLOCKING"] = "1"
+		# os.environ["TORCH_USE_CUDA_DSA"] = "1"
+		# os.environ["CUDA_LAUNCH_BLOCKING"] = "1"
 		os.environ["HF_HUB_TIMEOUT"] = "120"
 		logger_config.debug("CUDA environment variables configured")
 
-		self.blip_model = blip_model
-		self.sentence_model = sentence_model
+		self.blip_model_name = blip_model_name
+		self.sentence_model_name = sentence_model_name
+		self.clip_model_name = clip_model_name
+
+		self.processor = None
+		self.blip_model = None
+		self.clip_processor = None
+		self.clip_model = None
+		self.embedder = None
+		self.nlp = None
+
 		self.subtitles = []
 		self.subtitle_embeddings = None
-		self._load_model()
 		
 		# Improved matching weights
 		self.weights = {
+            'clip': 0.40,      # Direct text-to-image similarity
 			'semantic': 0.35,
 			'tfidf': 0.20,
 			'entity': 0.15,
@@ -45,61 +53,74 @@ class TextFrameAligner:
 		
 		logger_config.info("TextFrameAligner initialization completed successfully")
 
-	def _load_model(self):
-		"""Load all required models with detailed logging."""
-		try:
-			logger_config.info("Starting model loading process")
-			
-			# Load BLIP model
-			logger_config.info(f"Loading BLIP image captioning model: {self.blip_model}")
-			start_time = time.time()
-			
-			from transformers import BlipProcessor, BlipForConditionalGeneration
-			logger_config.debug("Importing BLIP components from transformers library")
-			
-			logger_config.info("Loading BLIP processor")
-			self.processor = BlipProcessor.from_pretrained(self.blip_model)
-			
-			logger_config.info("Loading BLIP conditional generation model")
-			self.blip_model = BlipForConditionalGeneration.from_pretrained(self.blip_model).to(self.device)
-			
-			blip_load_time = time.time() - start_time
-			logger_config.info(f"BLIP model loading completed in {blip_load_time:.2f} seconds")
-			
-			# Load sentence transformer
-			logger_config.info(f"Loading sentence transformer model: {self.sentence_model}")
-			start_time = time.time()
-			
-			self.embedder = SentenceTransformer(self.sentence_model)
-			
-			sentence_load_time = time.time() - start_time
-			logger_config.info(f"Sentence transformer loading completed in {sentence_load_time:.2f} seconds")
+	def load_blip(self):
+		if self.blip_model is not None:
+			return  # Already loaded
 
-			# Load spaCy
-			self._load_spacy()
-			
-		except Exception as e:
-			logger_config.error(f"Model loading failed with error: {str(e)}")
-			raise RuntimeError(f"Failed to load model: {str(e)}")
+		logger_config.info(f"Loading BLIP model: {self.blip_model_name}")
+		from transformers import BlipProcessor, BlipForConditionalGeneration
+		self.processor = BlipProcessor.from_pretrained(self.blip_model_name)
+		self.blip_model = BlipForConditionalGeneration.from_pretrained(self.blip_model_name).to(self.device)
 
-	def _load_spacy(self):
-		"""Load spaCy model with error handling and logging"""
+	def unload_blip(self):
+		if self.blip_model:
+			logger_config.info("Unloading BLIP model to free memory")
+			del self.blip_model
+			del self.processor
+			self.blip_model = None
+			self.processor = None
+
+	def load_clip(self):
+		if self.clip_model is not None:
+			return  # Already loaded
+
+		logger_config.info(f"Loading CLIP model: {self.clip_model_name}")
+		from transformers import CLIPProcessor, CLIPModel
+		self.clip_model = CLIPModel.from_pretrained(self.clip_model_name).to(self.device)
+		self.clip_processor = CLIPProcessor.from_pretrained(self.clip_model_name)
+
+	def unload_clip(self):
+		if self.clip_model:
+			logger_config.info("Unloading CLIP model to free memory")
+			del self.clip_model
+			del self.clip_processor
+			self.clip_model = None
+			self.clip_processor = None
+
+	def load_sentence_model(self):
+		if self.embedder is not None:
+			return  # Already loaded
+
+		logger_config.info(f"Loading SentenceTransformer model: {self.sentence_model_name}")
+		self.embedder = SentenceTransformer(self.sentence_model_name)
+
+	def unload_sentence_model(self):
+		if self.embedder:
+			logger_config.info("Unloading SentenceTransformer to free memory")
+			del self.embedder
+			self.embedder = None
+
+	def load_spacy(self):
+		"""Load spaCy model if not already loaded."""
+		if self.nlp is not None:
+			return
+
+		import spacy
 		try:
 			logger_config.info("Loading spaCy NLP model: en_core_web_sm")
-			start_time = time.time()
-			
 			self.nlp = spacy.load("en_core_web_sm")
-			
-			spacy_load_time = time.time() - start_time
-			logger_config.info(f"spaCy model loading completed in {spacy_load_time:.2f} seconds")
-			
 		except OSError:
-			logger_config.warning("spaCy model not found locally, initiating download")
+			logger_config.warning("spaCy model not found locally, downloading it...")
 			from spacy.cli import download
-			logger_config.info("Downloading en_core_web_sm model")
 			download("en_core_web_sm")
 			self.nlp = spacy.load("en_core_web_sm")
-			logger_config.info("spaCy model download and loading completed")
+
+	def unload_spacy(self):
+		"""Unload spaCy NLP model to free memory."""
+		if self.nlp:
+			logger_config.info("Unloading spaCy NLP model to free memory")
+			del self.nlp
+			self.nlp = None
 
 	def load_subtitles(self, subtitle_path: str):
 		"""Load and process subtitle data for enhanced matching"""
@@ -114,9 +135,11 @@ class TextFrameAligner:
 		subtitle_texts = [sub['text'] for sub in self.subtitles]
 		
 		if subtitle_texts:
+			self.load_sentence_model()
 			logger_config.info("Computing sentence embeddings for subtitle corpus")
 			self.subtitle_embeddings = self.embedder.encode(subtitle_texts, convert_to_tensor=True)
 			logger_config.info(f"Generated embeddings for {len(subtitle_texts)} subtitle entries")
+			self.unload_sentence_model()
 		
 		# Log subtitle coverage
 		if self.subtitles:
@@ -134,12 +157,12 @@ class TextFrameAligner:
 			if (sub['end'] >= start_time - buffer and sub['start'] <= end_time + buffer):
 				relevant_subs.append(sub)
 		
-		logger_config.debug(f"Found {len(relevant_subs)} subtitles overlapping with timerange {start_time:.1f}-{end_time:.1f}s (buffer: {buffer}s)")
+		logger_config.debug(f"Found {len(relevant_subs)} subtitles overlapping with timerange {start_time:.1f}-{end_time:.1f}s (buffer: {buffer}s)", overwrite=True)
 		return relevant_subs
 
 	def extract_scenes_with_scenedetect(self, video_path: str, threshold: float = 30.0) -> Tuple[List[str], List[int], List[float]]:
 		"""Extract one frame per scene using modern PySceneDetect API."""
-		from scenedetect import detect, ContentDetector
+		from scenedetect import detect, ContentDetector, ThresholdDetector
 		logger_config.info(f"Starting scene detection for video: {video_path}")
 		logger_config.info(f"Scene detection threshold set to: {threshold}")
 
@@ -182,16 +205,41 @@ class TextFrameAligner:
 			frame_paths.append(frame_path)
 			frame_numbers.append(start_frame)
 			timestamps.append(start_frame / fps)
-			
-			if (i + 1) % 20 == 0:
-				logger_config.info(f"Frame extraction progress: {i + 1}/{len(scene_list)} scenes processed", overwrite=True)
+
+			logger_config.info(f"Frame extraction progress: {i + 1}/{len(scene_list)} scenes processed", overwrite=True)
 
 		cap.release()
 		logger_config.info(f"Frame extraction completed. Extracted {len(frame_paths)} frames from {len(scene_list)} scenes")
 		return frame_paths, frame_numbers, timestamps
 
+	def compute_frame_clip_embeddings(self, frame_paths: List[str]) -> torch.Tensor:
+		"""Efficiently compute CLIP image embeddings for all frames in batches."""
+		self.load_clip()
+		logger_config.info("Computing CLIP image embeddings for all frames.")
+		all_embeddings = []
+		batch_size = 16  # Adjust based on your VRAM
+
+		for i in range(0, len(frame_paths), batch_size):
+			batch_paths = frame_paths[i:i + batch_size]
+			images = [Image.open(p) for p in batch_paths]
+
+			inputs = self.clip_processor(text=None, images=images, return_tensors="pt", padding=True).to(self.device)
+			with torch.inference_mode():
+				image_features = self.clip_model.get_image_features(inputs.pixel_values)
+
+			all_embeddings.append(image_features.cpu())
+
+			for img in images: # Close images after processing
+				img.close()
+
+			logger_config.debug(f"Processed batch {i//batch_size + 1}/{(len(frame_paths)-1)//batch_size + 1} for CLIP embeddings.", overwrite=True)
+		self.unload_clip()
+		return torch.cat(all_embeddings, dim=0)
+
 	def enhanced_caption_generation(self, frame_paths: List[str], timestamps: List[float]) -> List[str]:
 		"""Enhanced captioning that incorporates subtitle context"""
+		self.load_blip()
+		self.load_sentence_model()
 		frame_count = len(frame_paths)
 		logger_config.info(f"Starting caption generation for {frame_count} extracted frames")
 		
@@ -219,15 +267,15 @@ class TextFrameAligner:
 					logger_config.debug(f"Frame {i+1}/{frame_count}: Generating caption without subtitle context")
 					inputs = self.processor(images=image, return_tensors="pt").to(self.device)
 				
-				with torch.no_grad():
+				with torch.inference_mode():
 					out = self.blip_model.generate(
 						**inputs, 
 						max_length=100,  # Increased for richer descriptions
 						num_beams=8,
 						length_penalty=0.8,
 						repetition_penalty=1.2,
-						do_sample=True,
-						temperature=0.7
+						# do_sample=True,
+						# temperature=0.7
 					)
 				
 				caption = self.processor.decode(out[0], skip_special_tokens=True)
@@ -250,10 +298,11 @@ class TextFrameAligner:
 					logger_config.debug(f"Used subtitle context: '{context_text[:50]}...'")
 					
 			except Exception as e:
-				logger_config.error(f"Caption generation failed for frame {frame_path}: {str(e)}")
-				captions.append("Error processing frame")
+				raise ValueError(f"Caption generation failed for frame {frame_path}: {str(e)}")
 		
 		logger_config.info(f"Caption generation completed for all {len(captions)} frames")
+		self.unload_blip()
+		self.unload_sentence_model()
 		return captions
 
 	def subtitle_similarity_score(self, query: str, timestamp: float, buffer: float = 3.0) -> float:
@@ -304,19 +353,25 @@ class TextFrameAligner:
 		if current_timestamp > previous_timestamp:
 			# Forward progression bonus, decaying with time difference
 			score = max(0, 1.0 - (time_diff / 30.0))  # 30 second decay
-			logger_config.debug(f"Forward temporal progression: {previous_timestamp:.1f}s -> {current_timestamp:.1f}s (diff: {time_diff:.1f}s, score: {score:.4f})")
+			logger_config.debug(f"Forward temporal progression: {previous_timestamp:.1f}s -> {current_timestamp:.1f}s (diff: {time_diff:.1f}s, score: {score:.4f})", overwrite=True)
 		else:
 			# Backward jump penalty
 			score = -0.5 * min(1.0, time_diff / 10.0)
-			logger_config.debug(f"Backward temporal jump: {previous_timestamp:.1f}s -> {current_timestamp:.1f}s (diff: {time_diff:.1f}s, penalty: {score:.4f})")
+			logger_config.debug(f"Backward temporal jump: {previous_timestamp:.1f}s -> {current_timestamp:.1f}s (diff: {time_diff:.1f}s, penalty: {score:.4f})", overwrite=True)
 		
 		return score
 
-	def find_best_match_enhanced(self, captions: List[str], timestamps: List[float], query: str, 
-							   previous_timestamp: Optional[float] = None, top_k: int = 5) -> List[Tuple[int, float, Dict]]:
+	def find_best_match(self, captions: List[str], timestamps: List[float], query: str, frame_clip_embeddings: torch.Tensor, previous_timestamp: Optional[float] = None, top_k: int = 5) -> List[Tuple[int, float, Dict]]:
 		"""Enhanced matching with subtitle integration and temporal coherence"""
 		logger_config.debug(f"Starting enhanced matching for query: '{query[:100]}...'")
-		
+
+		# 0. CLIP Similarity (Text-to-Image)
+		logger_config.debug("Computing CLIP similarity scores.")
+		clip_inputs = self.clip_processor(text=[query], images=None, return_tensors="pt", padding=True).to(self.device)
+		with torch.inference_mode():
+			text_features = self.clip_model.get_text_features(**clip_inputs)
+		clip_similarities = util.cos_sim(text_features.cpu(), frame_clip_embeddings)[0]
+
 		# 1. Semantic similarity
 		logger_config.debug("Computing semantic similarity scores using sentence embeddings")
 		all_texts = captions + [query]
@@ -339,8 +394,8 @@ class TextFrameAligner:
 			tfidf_similarities = np.zeros(len(captions))
 		
 		# 3. Entity matching
-		logger_config.debug("Computing entity matching scores")
-		entity_scores = self.enhance_matching_with_entities(captions, query)
+		# logger_config.debug("Computing entity matching scores")
+		# entity_scores = self.enhance_matching_with_entities(captions, query)
 		
 		# 4. Subtitle similarity scores
 		logger_config.debug("Computing subtitle similarity scores for all timestamps")
@@ -355,17 +410,19 @@ class TextFrameAligner:
 		final_scores = []
 		for i in range(len(captions)):
 			combined_score = (
+				self.weights['clip'] * float(clip_similarities[i]) +
 				self.weights['semantic'] * float(semantic_similarities[i]) +
 				self.weights['tfidf'] * float(tfidf_similarities[i]) +
-				self.weights['entity'] * entity_scores[i] +
+				# self.weights['entity'] * entity_scores[i] +
 				self.weights['subtitle'] * subtitle_scores[i] +
 				self.weights['temporal'] * temporal_scores[i]
 			)
 			
 			score_breakdown = {
+				'clip': float(clip_similarities[i]),
 				'semantic': float(semantic_similarities[i]),
 				'tfidf': float(tfidf_similarities[i]),
-				'entity': entity_scores[i],
+				# 'entity': entity_scores[i],
 				'subtitle': subtitle_scores[i],
 				'temporal': temporal_scores[i],
 				'combined': combined_score
@@ -380,79 +437,78 @@ class TextFrameAligner:
 		# Log top matches
 		for rank, (idx, score, breakdown) in enumerate(final_scores[:3]):
 			logger_config.debug(f"Match rank {rank+1}: Frame {idx} at {timestamps[idx]:.1f}s (score: {score:.4f})")
-		
+
 		return final_scores[:top_k]
 
-	def enhance_matching_with_entities(self, captions: List[str], query: str) -> List[float]:
-		"""Enhanced entity matching with character names and anime-specific terms"""
-		logger_config.debug("Starting entity extraction from query text")
-		doc = self.nlp(query)
+	# def enhance_matching_with_entities(self, captions: List[str], query: str) -> List[float]:
+	# 	"""Enhanced entity matching with character names and anime-specific terms"""
+		# logger_config.debug("Starting entity extraction from query text")
+		# doc = self.nlp(query)
 		
 		# Extract entities with expanded categories
-		entities = []
-		for ent in doc.ents:
-			if ent.label_ in ['PERSON', 'ORG', 'GPE', 'PRODUCT', 'WORK_OF_ART']:
-				entities.append(ent.text.lower())
+		# entities = []
+		# for ent in doc.ents:
+		# 	if ent.label_ in ['PERSON', 'ORG', 'GPE', 'PRODUCT', 'WORK_OF_ART']:
+		# 		entities.append(ent.text.lower())
 		
-		logger_config.debug(f"Extracted {len(entities)} named entities: {entities}")
+		# logger_config.debug(f"Extracted {len(entities)} named entities: {entities}")
 		
 		# Extract important nouns and proper nouns
-		important_terms = []
-		for token in doc:
-			if (token.pos_ in ['NOUN', 'PROPN'] and 
-				not token.is_stop and 
-				len(token.text) > 2):
-				important_terms.append(token.text.lower())
+		# important_terms = []
+		# for token in doc:
+		# 	if (token.pos_ in ['NOUN', 'PROPN'] and 
+		# 		not token.is_stop and 
+		# 		len(token.text) > 2):
+		# 		important_terms.append(token.text.lower())
 		
-		logger_config.debug(f"Extracted {len(important_terms)} important terms: {important_terms[:10]}...")
+		# logger_config.debug(f"Extracted {len(important_terms)} important terms: {important_terms[:10]}...")
 		
 		# Add anime/action specific terms
-		action_terms = ['attack', 'power', 'energy', 'beam', 'blast', 'fight', 'battle', 
-					   'strike', 'punch', 'kick', 'transformation', 'aura']
-		query_lower = query.lower()
-		action_terms_found = []
-		for term in action_terms:
-			if term in query_lower:
-				important_terms.append(term)
-				action_terms_found.append(term)
+		# action_terms = ['attack', 'power', 'energy', 'beam', 'blast', 'fight', 'battle', 'strike', 'punch', 'kick', 'transformation', 'aura']
+		# query_lower = query.lower()
+		# action_terms_found = []
+		# for term in action_terms:
+		# 	if term in query_lower:
+		# 		important_terms.append(term)
+		# 		action_terms_found.append(term)
 		
-		if action_terms_found:
-			logger_config.debug(f"Found action-specific terms: {action_terms_found}")
+		# if action_terms_found:
+		# 	logger_config.debug(f"Found action-specific terms: {action_terms_found}")
 		
-		key_terms = list(set(entities + important_terms))
-		logger_config.debug(f"Total key terms for matching: {len(key_terms)}")
+		# key_terms = list(set(entities + important_terms))
+		# logger_config.debug(f"Total key terms for matching: {len(key_terms)}")
 		
-		if not key_terms:
-			logger_config.debug("No key terms found, returning zero scores for all captions")
-			return [0.0] * len(captions)
+		# if not key_terms:
+		# 	logger_config.debug("No key terms found, returning zero scores for all captions")
+		# 	return [0.0] * len(captions)
 		
 		# Calculate fuzzy matching scores
-		logger_config.debug("Computing entity matching scores with fuzzy matching")
-		keyword_scores = []
-		for i, caption in enumerate(captions):
-			caption_lower = caption.lower()
-			exact_matches = sum(1 for term in key_terms if term in caption_lower)
+		# logger_config.debug("Computing entity matching scores with fuzzy matching")
+		# keyword_scores = []
+		# for i, caption in enumerate(captions):
+			# caption_lower = caption.lower()
+			# exact_matches = sum(1 for term in key_terms if term in caption_lower)
 			
 			# Add fuzzy matching for character names
-			fuzzy_matches = 0
-			for term in key_terms:
-				if len(term) > 4:  # Only for longer terms
-					matches = difflib.get_close_matches(term, caption_lower.split(), n=1, cutoff=0.8)
-					if matches:
-						fuzzy_matches += 0.5  # Half score for fuzzy matches
+			# fuzzy_matches = 0
+			# for term in key_terms:
+			# 	if len(term) > 4:  # Only for longer terms
+			# 		matches = difflib.get_close_matches(term, caption_lower.split(), n=1, cutoff=0.8)
+			# 		if matches:
+			# 			fuzzy_matches += 0.5  # Half score for fuzzy matches
 			
-			total_score = exact_matches + fuzzy_matches
-			keyword_scores.append(total_score)
+			# total_score = exact_matches + fuzzy_matches
+			# keyword_scores.append(total_score)
 			
-			if total_score > 0:
-				logger_config.debug(f"Caption {i}: {exact_matches} exact + {fuzzy_matches:.1f} fuzzy matches = {total_score:.1f}")
+			# if total_score > 0:
+			# 	logger_config.debug(f"Caption {i}: {exact_matches} exact + {fuzzy_matches:.1f} fuzzy matches = {total_score:.1f}", overwrite=True)
 		
 		# Normalize scores
-		max_score = max(keyword_scores) if keyword_scores else 1
-		normalized_scores = [score / max_score if max_score > 0 else 0 for score in keyword_scores]
+		# max_score = max(keyword_scores) if keyword_scores else 1
+		# normalized_scores = [score / max_score if max_score > 0 else 0 for score in keyword_scores]
 		
-		logger_config.debug(f"Entity matching completed. Max raw score: {max_score}, normalized scores computed")
-		return normalized_scores
+		# logger_config.debug(f"Entity matching completed. Max raw score: {max_score}, normalized scores computed")
+		# return normalized_scores
 
 	def reset(self):
 		"""Reset environment and clean up temporary files"""
@@ -492,8 +548,10 @@ class TextFrameAligner:
 		
 		cleaned_text = self.clean_sentence(text)
 		logger_config.debug("Text cleaning completed")
-		
+
+		self.load_spacy()
 		doc = self.nlp(cleaned_text)
+		self.unload_spacy()
 		logger_config.debug("spaCy sentence segmentation completed")
 		
 		sentences = []
@@ -559,6 +617,12 @@ class TextFrameAligner:
 		frame_paths, frame_numbers, timestamps = self.extract_scenes_with_scenedetect(video_path)
 		frame_extraction_time = time.time() - frame_extraction_start
 		logger_config.info(f"Frame extraction completed in {frame_extraction_time:.2f} seconds")
+
+		# Step 3.5: Pre-compute CLIP embeddings for all frames ---
+		logger_config.info("STEP 3.5: Pre-computing CLIP embeddings for all frames")
+		clip_embedding_start = time.time()
+		frame_clip_embeddings = self.compute_frame_clip_embeddings(frame_paths)
+		logger_config.info(f"CLIP embedding computation completed in {time.time() - clip_embedding_start:.2f} seconds")
 		
 		# Step 4: Enhanced captioning
 		logger_config.info("STEP 4: Frame Caption Generation")
@@ -576,19 +640,20 @@ class TextFrameAligner:
 		
 		# Step 6: Enhanced matching
 		logger_config.info("STEP 6: Frame-Text Matching with Enhanced Scoring")
-		matching_start = time.time()
 		
 		results = []
 		previous_timestamp = None
-		
+		self.load_clip()
+		self.load_sentence_model()
+		self.load_spacy()
 		for i, sentence in enumerate(sentences):
 			logger_config.info(f"Processing sentence {i+1} of {len(sentences)}")
 			logger_config.debug(f"Sentence text: '{sentence}'")
 			
 			# Get enhanced matches
 			sentence_matching_start = time.time()
-			matches = self.find_best_match_enhanced(
-				captions, timestamps, sentence, previous_timestamp, top_k=5
+			matches = self.find_best_match(
+				captions, timestamps, sentence, frame_clip_embeddings, previous_timestamp, top_k=5
 			)
 			sentence_matching_time = time.time() - sentence_matching_start
 			
@@ -606,7 +671,7 @@ class TextFrameAligner:
 			
 			logger_config.info(f"Best match found: Frame {frame_num} at timestamp {timestamp:.1f}s")
 			logger_config.info(f"Overall matching score: {best_score:.4f} (processed in {sentence_matching_time:.2f}s)")
-			logger_config.debug(f"Score breakdown - Semantic: {score_breakdown['semantic']:.4f}, TF-IDF: {score_breakdown['tfidf']:.4f}, Entity: {score_breakdown['entity']:.4f}, Subtitle: {score_breakdown['subtitle']:.4f}, Temporal: {score_breakdown['temporal']:.4f}")
+			logger_config.debug(f"Score breakdown - Semantic: {score_breakdown['semantic']:.4f}, TF-IDF: {score_breakdown['tfidf']:.4f}, Subtitle: {score_breakdown['subtitle']:.4f}, Temporal: {score_breakdown['temporal']:.4f}")
 			
 			if relevant_subs:
 				subtitle_texts = [sub['text'] for sub in relevant_subs[:2]]
@@ -627,7 +692,9 @@ class TextFrameAligner:
 			})
 			
 			previous_timestamp = timestamp
-		
+		self.unload_clip()
+		self.unload_sentence_model()
+		self.unload_spacy()
 		# Step 6: Save enhanced results
 		self.save_enhanced_results(results, OUTPUT_JSON)
 		
