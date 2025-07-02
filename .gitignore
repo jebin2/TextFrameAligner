@@ -209,3 +209,4 @@ temp_dir
 input.mkv
 subtitle.json
 hf_download
+temp.py
