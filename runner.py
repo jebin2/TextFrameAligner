@@ -43,12 +43,12 @@ def current_env():
 	raise ValueError("Please set env first")
 
 def initiate(args):
-	from text_frame_aligner import TextFrameAligner
+	from optimised_text_frame_aligner import TextFrameAligner
 	global ENGINE
 	if not ENGINE:
 		ENGINE = TextFrameAligner()
 
-	result = ENGINE.process(args)
+	result = ENGINE.process(args.input)
 	return result
 
 def main():
@@ -63,7 +63,7 @@ def main():
 	)
 	parser.add_argument(
 		"--input", 
-		help="Input audio/video file path"
+		help="input_json file path"
 	)
 	
 	args = parser.parse_args()
