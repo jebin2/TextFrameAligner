@@ -47,7 +47,6 @@ class TextFrameAligner:
 		self.clip_processor = None
 		self.clip_model = None
 		self.embedder = None
-		self.nlp = None
 
 		# Cached data
 		self.subtitles = []
@@ -80,15 +79,6 @@ class TextFrameAligner:
 		self.embedder = SentenceTransformer(self.sentence_model_name)
 		if self.device == "cuda":
 			self.embedder = self.embedder.to(self.device)
-
-		# Load spaCy
-		import spacy
-		try:
-			self.nlp = spacy.load("en_core_web_sm")
-		except OSError:
-			from spacy.cli import download
-			download("en_core_web_sm")
-			self.nlp = spacy.load("en_core_web_sm")
 
 		logger_config.info("All models loaded successfully")
 
@@ -479,7 +469,7 @@ class TextFrameAligner:
 		return results
 
 	def split_recap_sentences(self, text: str) -> List[str]:
-		"""sentence splitting with minimal spaCy usage"""
+		"""sentence splitting with gemini"""
 		logger_config.info("Starting sentence splitting")
 
 		with open("sentence_split_system_prompt.md", 'r') as file:
@@ -500,9 +490,6 @@ class TextFrameAligner:
 		))
 		sentences = json.loads(model_responses[0])["sentences"]
 
-		# doc = self.nlp(text)
-		# sentences = [sent.text.strip() for sent in doc.sents if len(sent.text.strip()) > 8]
-		
 		logger_config.info(f"Generated {len(sentences)} sentences")
 		return sentences
 
