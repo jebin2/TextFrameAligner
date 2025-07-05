@@ -17,6 +17,8 @@ from concurrent.futures import ThreadPoolExecutor
 import multiprocessing as mp
 from functools import lru_cache
 import gc
+from gemiwrap import GeminiWrapper
+from google import genai
 
 os.environ['HF_HOME'] = os.path.abspath(os.path.realpath(os.path.join(os.path.dirname(__file__), './hf_download')))
 TEMP_DIR = "temp_dir"
@@ -45,7 +47,6 @@ class TextFrameAligner:
 		self.clip_processor = None
 		self.clip_model = None
 		self.embedder = None
-		self.nlp = None
 
 		# Cached data
 		self.subtitles = []
@@ -79,15 +80,6 @@ class TextFrameAligner:
 		if self.device == "cuda":
 			self.embedder = self.embedder.to(self.device)
 
-		# Load spaCy
-		import spacy
-		try:
-			self.nlp = spacy.load("en_core_web_sm")
-		except OSError:
-			from spacy.cli import download
-			download("en_core_web_sm")
-			self.nlp = spacy.load("en_core_web_sm")
-
 		logger_config.info("All models loaded successfully")
 
 	def load_blip_on_demand(self):
@@ -115,6 +107,19 @@ class TextFrameAligner:
 			self.processor = None
 			if torch.cuda.is_available():
 				torch.cuda.empty_cache()
+
+	def is_mostly_black(self, img, black_pixel_threshold=0.9, black_rgb_threshold=10):
+		"""
+		Returns True if >= 90% of pixels are near black.
+		`black_rgb_threshold` defines how dark a pixel must be to count as black.
+		"""
+		img = img.convert("RGB")
+		pixels = list(img.getdata())
+		total_pixels = len(pixels)
+		black_pixels = sum(
+			1 for r, g, b in pixels if r <= black_rgb_threshold and g <= black_rgb_threshold and b <= black_rgb_threshold
+		)
+		return (black_pixels / total_pixels) >= black_pixel_threshold
 
 	def extract_scenes(self, video_path: str, threshold: float = 30.0) -> Tuple[List[str], List[int], List[float]]:
 		"""scene extraction with parallel frame processing"""
@@ -154,6 +159,8 @@ class TextFrameAligner:
 				return None
 
 			with Image.fromarray(cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)) as image:
+				if self.is_mostly_black(image):
+					return None
 				filename = f"scene_{i:03d}_frame_{frame_num}_at_frame_second{timestamp:.2f}frame_second.jpg"
 				frame_path = os.path.join(frames_dir, filename)
 
@@ -359,7 +366,7 @@ class TextFrameAligner:
 				vectorizer = TfidfVectorizer(
 					stop_words='english',
 					ngram_range=(1, 2),
-					max_features=1000,  # Limit features for speed
+					# max_features=1000,  # Limit features for speed
 					dtype=np.float32	 # Use float32 for speed
 				)
 				tfidf_matrix = vectorizer.fit_transform(captions + [query])
@@ -462,12 +469,27 @@ class TextFrameAligner:
 		return results
 
 	def split_recap_sentences(self, text: str) -> List[str]:
-		"""sentence splitting with minimal spaCy usage"""
+		"""sentence splitting with gemini"""
 		logger_config.info("Starting sentence splitting")
 
-		doc = self.nlp(text)
-		sentences = [sent.text.strip() for sent in doc.sents if len(sent.text.strip()) > 8]
-		
+		with open("sentence_split_system_prompt.md", 'r') as file:
+			system_prompt = file.read()
+
+		geminiWrapper = GeminiWrapper(system_instruction=system_prompt)
+		model_responses = geminiWrapper.send_message(text, schema=genai.types.Schema(
+			type = genai.types.Type.OBJECT,
+			required = ["sentences"],
+			properties = {
+				"sentences": genai.types.Schema(
+					type = genai.types.Type.ARRAY,
+					items = genai.types.Schema(
+						type = genai.types.Type.STRING,
+					),
+				),
+			},
+		))
+		sentences = json.loads(model_responses[0])["sentences"]
+
 		logger_config.info(f"Generated {len(sentences)} sentences")
 		return sentences
 
@@ -607,9 +629,6 @@ class TextFrameAligner:
 if __name__ == "__main__":
 	# Initializematcher
 	matcher = TextFrameAligner(max_workers=8)
-
-	video_path = "input2.mkv" 
-	recap_text = """As Olivia takes off in her Jeep with Eddie in tow, he warns her that the road is kind of a dead end, but Olivia just smiles. This implies there is something deeper at play with Eddie and Olivia. Back at the train depot, she sees Fin sitting on a park bench reading. She comes over to him, and Eddie offers her a ride to go get food for the three of them from the local hot dog stand. This shows the bond that the three have. Joe is brought up but Olivia says she’s not mad at him. This further shows she holds Joe at a certain level that does not have as high expectation. Now, they are around a table. That leads to Eddie cooking up some food while having an engaging talk with Olivia and Finn, with Finn being more interested in reading and Olivia more interested in his thoughts. He responds by saying some people like clubs where they watch old photographs and sometimes the movie. Eddie then decides to call it a day and has the boys help him bring the table and chairs inside. We then go to night, where Olivia, staying at Finn's depot, is up walking around and she approaches Finn. Olivia explains that if they kept busy with the movie that everyone feels awkward at first and they could get past it. However, Finn states that you don't need to be there. This show that he thinks they can’t deal with him being around. Olivia then says he's just afraid to have people know a midget. So then, with just a few minutes left here for this part, we see Olivia walking back and thinking of what to say to him, and the scene ends. Finn has a long way to go to accept himself. The viewer is not certain about where the characters lie now. And then Finn says this, but because I'm actually a really decent and simple boring depression, and it kind of has been what different people see me to be. I don't need to think about anything, it will be that way or to come and the station that does not say no. And that's where we'll end this part. Picking up where we left off, Olivia is drinking alone, pondering recent events, which shows her loneliness and pain she has been through in life. The next morning, Fin is at the library where Olivia is working to get a library card, as we all know libraries are good for a lot more than just getting books these days. After he completes the form, he hands it to Olivia, and she is glad to see him. The conversation is light, and Fin tells her about the librarian that Joe is wooing and it is mentioned Joe seems down, which implies he may be lonely. What happens if one day you fall off that pedestal, then what? What will happen to Joe if he cannot get to see Olivia again, and the librarian does not want to see him. The next scene shows Joe walking along the train tracks, again meeting Fin. He's come to apologize for how he's been acting. He tells Fin that Olivia has left his life. Joe confesses that he's just afraid of getting hurt and that Finn and Olivia are special people in his life, as he has never been close to many people before. Finn then explains to Joe that one should avoid using bad words while trying to make nice. Olivia, back in the library, also asks Joe why he is mad. What can they all do? Why is this happening? Olivia asks the question of how she will find someone to love again if she can't get over it. Does Olivia feel that it’s easier for her now since it was Joe who messed up and not her. In the next scene, Joe arrives at the station to deliver groceries, and it's also mentioned he's trying to woo a local librarian at the library. As Finn unloads the groceries, Eddie arrives to apologize to Fin for not being a real friend. He asks Finn if they can hang out sometime, but Finn is not interested. He mentions what a good friend he is to Olivia. Now, on the steps leading to the station, Finn thinks to himself: What has he done with his life? How can he be happier if he isolates himself? What can happen next? Has Finn made it too difficult to build bridges? Has Finn acted too slow and put himself behind Eddie? Is Olivia right? What will Part 3 bring? Then, Finn returns toward the train station where Olivia is as this review comes to a close, which leaves many narrative points open for Part 3 to tackle, such as: Will Joe pursue the librarian? Will Finn and Eddie become friends again? Will Finn and Olivia ever reveal their true feelings for one another? What will be next for Olivia? As Finn looks up in the station, it will be left to the viewer and audience to determine the future of Finn and Olivia. All of this could be seen in the final part. Finn has some difficult choices. Finn goes back to teaching in the end."""
 
 	# Process with optimizations
 	results = matcher.process("input.json")
