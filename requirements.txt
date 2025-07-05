@@ -5,4 +5,7 @@ sentence_transformers
 scikit-learn
 transformers
 git+https://github.com/jebin2/custom_logger.git
+git+https://github.com/jebin2/gemiwrap.git
 scenedetect[opencv]
+accelerate
+torchvision

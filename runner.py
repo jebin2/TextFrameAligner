@@ -43,7 +43,7 @@ def current_env():
 	raise ValueError("Please set env first")
 
 def initiate(args):
-	from optimised_text_frame_aligner import TextFrameAligner
+	from text_frame_aligner import TextFrameAligner
 	global ENGINE
 	if not ENGINE:
 		ENGINE = TextFrameAligner()
