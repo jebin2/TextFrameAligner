@@ -13,7 +13,6 @@ from typing import List, Tuple, Dict, Optional
 import numpy as np
 import time
 import json
-from concurrent.futures import ThreadPoolExecutor
 import multiprocessing as mp
 from functools import lru_cache
 import gc
@@ -24,13 +23,24 @@ from scenedetect import detect, ContentDetector
 import hashlib
 import re
 from pathlib import Path
+from sklearn.feature_extraction.text import TfidfVectorizer
+from sklearn.metrics.pairwise import cosine_similarity
+import string
+import shutil
+from gemiwrap import GeminiWrapper
 
 TEMP_DIR = "temp_dir"
 CACHE_DIR = f"{TEMP_DIR}/cache_dir"
 OUTPUT_JSON = f'{TEMP_DIR}/output.json'
 
 class TextFrameAligner:
-	def __init__(self, blip_model_name="Salesforce/blip-image-captioning-large", sentence_model_name='all-mpnet-base-v2', clip_model_name="openai/clip-vit-large-patch14", max_workers=None):
+	def __init__(self, 
+				 blip_model_name="Salesforce/blip-image-captioning-large", 
+				 sentence_model_name='all-mpnet-base-v2', 
+				#  vision_model_name="google/siglip-base-patch16-224",  # Changed to SigLIP
+				 vision_model_name="google/siglip2-so400m-patch16-384",  # Changed to SigLIP
+				 max_workers=None):
+		
 		self.device = "cuda" if torch.cuda.is_available() else "cpu"
 		self.max_workers = max_workers or max(8, mp.cpu_count()-4)
 		logger_config.info("TextFrameAligner initialization started")
@@ -39,40 +49,41 @@ class TextFrameAligner:
 		# Environment setup with optimizations
 		os.environ["HF_HUB_TIMEOUT"] = "120"
 		if torch.cuda.is_available():
-			torch.backends.cudnn.benchmark = True  # Optimize for consistent input sizes
-			torch.set_float32_matmul_precision('high')  # Use Tensor Cores on RTX cards
+			torch.backends.cudnn.benchmark = True
+			torch.set_float32_matmul_precision('high')
 
 		self.blip_model_name = blip_model_name
 		self.sentence_model_name = sentence_model_name
-		self.clip_model_name = clip_model_name
+		self.vision_model_name = vision_model_name
 		self.cache_path = None
 
 		# Model containers
 		self.processor = None
 		self.blip_model = None
-		self.clip_processor = None
-		self.clip_model = None
+		self.vision_processor = None
+		self.vision_model = None
 		self.embedder = None
 
 		# Cached data
 		self.subtitles = []
 		self.subtitle_embeddings = None
-		self._sentence_cache = {}  # Cache for sentence embeddings
-		self._clip_text_cache = {}  # Cache for CLIP text embeddings
+		self._sentence_cache = {}
+		self._vision_text_cache = {}
+		self._tfidf_vectorizer = None
 		
-		# weights
+		# Fixed weights - rebalanced for better performance
 		self.weights = {
-			'clip': 0.40,
-			# 'semantic': 0.35,
-			# 'tfidf': 0.15,  # Reduced as it's computationally expensive
-			# 'subtitle': 0.25,
-			# 'temporal': 0.05
+			'vision': 0.45,	  # SigLIP/CLIP similarity
+			'semantic': 0.40,	# Sentence transformer similarity
+			'tfidf': 0.10,	   # TF-IDF similarity
+			'subtitle': 0.20,	# Subtitle context similarity
+			'temporal': 0.30	 # Temporal coherence
 		}
 		
 		logger_config.info("TextFrameAligner initialization completed")
 
 	def set_cache_dir(self, identifier: str) -> str:
-		"""Generates a unique cache directory path for a given identifier (e.g., video path or text)."""
+		"""Generates a unique cache directory path for a given identifier."""
 		content_hash = hashlib.md5(identifier.encode()).hexdigest()
 		cache_path = os.path.join(CACHE_DIR, content_hash)
 		if not os.path.exists(cache_path):
@@ -80,30 +91,43 @@ class TextFrameAligner:
 		os.makedirs(cache_path, exist_ok=True)
 		self.cache_path = cache_path
 
-	def load_clip_on_demand(self):
-		"""Load CLIP only when needed and optimize for inference"""
-		if self.clip_model is not None:
+	def load_vision_model(self):
+		"""Load SigLIP or CLIP model for vision-text matching"""
+		if self.vision_model is not None:
 			return
 
-		# Load CLIP
-		from transformers import CLIPProcessor, CLIPModel
-		self.clip_model = CLIPModel.from_pretrained(self.clip_model_name).to(self.device)
-		self.clip_processor = CLIPProcessor.from_pretrained(self.clip_model_name)
+		logger_config.info(f"Loading vision model: {self.vision_model_name}")
+		
+		if "siglip" in self.vision_model_name.lower():
+			from transformers import SiglipProcessor, SiglipModel
+			self.vision_model = SiglipModel.from_pretrained(self.vision_model_name).to(self.device)
+			self.vision_processor = SiglipProcessor.from_pretrained(self.vision_model_name)
+		else:
+			# Fallback to CLIP
+			from transformers import CLIPProcessor, CLIPModel
+			self.vision_model = CLIPModel.from_pretrained(self.vision_model_name).to(self.device)
+			self.vision_processor = CLIPProcessor.from_pretrained(self.vision_model_name)
 
 	@torch.inference_mode()
 	def load_sentence_transformer(self):
-		"""Load all models at once to avoid repeated loading/unloading"""
+		"""Load SentenceTransformer"""
 		logger_config.info("Loading SentenceTransformer")
-
-		# Load SentenceTransformer
 		self.embedder = SentenceTransformer(self.sentence_model_name)
 		if self.device == "cuda":
 			self.embedder = self.embedder.to(self.device)
-
 		logger_config.info("SentenceTransformer loaded successfully")
 
+	def unload_sentence_transformer(self):
+		"""Unload BLIP model to free memory"""
+		if self.embedder:
+			logger_config.info("Unloading SentenceTransformer model")
+			del self.embedder
+			self.embedder = None
+			if torch.cuda.is_available():
+				torch.cuda.empty_cache()
+
 	def load_blip_on_demand(self):
-		"""Load BLIP only when needed and optimize for inference"""
+		"""Load BLIP model for image captioning"""
 		if self.blip_model is not None:
 			return
 
@@ -115,11 +139,11 @@ class TextFrameAligner:
 			torch_dtype=torch.float16 if self.device == "cuda" else torch.float32
 		).to(self.device)
 		
-		# Optimize for inference
 		if self.device == "cuda":
 			self.blip_model = torch.compile(self.blip_model, mode="reduce-overhead")
 
 	def unload_blip(self):
+		"""Unload BLIP model to free memory"""
 		if self.blip_model:
 			logger_config.info("Unloading BLIP model")
 			del self.blip_model, self.processor
@@ -129,17 +153,16 @@ class TextFrameAligner:
 				torch.cuda.empty_cache()
 
 	def extract_scenes(self, video_path: str, threshold: float = 30.0) -> Tuple[List[str], List[int], List[float]]:
-		"""Optimized scene extraction with faster detection and efficient frame extraction."""
+		"""Optimized scene extraction"""
 		cache_dir = f"{self.cache_path}/extract_scenes.json"
 		if os.path.exists(cache_dir):
-			logger_config.info(f"Using cache scene detection: {video_path}")
+			logger_config.info(f"Using cached scene detection: {video_path}")
 			with open(cache_dir, "r") as f:
 				data = json.load(f)
 			return data["frame_paths"], data["frame_numbers"], data["timestamps"]
 
-		logger_config.info(f"Starting optimized scene detection: {video_path}")
+		logger_config.info(f"Starting scene detection: {video_path}")
 
-		# 1. OPTIMIZATION: Use faster scene detection with downscaling and frame skipping
 		scene_list = detect(
 			video_path, 
 			ContentDetector(threshold=threshold),
@@ -152,12 +175,10 @@ class TextFrameAligner:
 		
 		logger_config.info(f"Found {len(scene_list)} scenes")
 
-		# 2. OPTIMIZATION: Pre-open video and get properties once
 		cap = cv2.VideoCapture(video_path)
 		if not cap.isOpened():
 			raise IOError(f"Cannot open video file: {video_path}")
 		
-		# Get video properties once
 		fps = cap.get(cv2.CAP_PROP_FPS)
 		total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
 		
@@ -168,61 +189,49 @@ class TextFrameAligner:
 		frames_dir = os.path.join(TEMP_DIR, "frames")
 		os.makedirs(frames_dir, exist_ok=True)
 
-		# 3. OPTIMIZATION: Create sorted frame extraction plan
 		extraction_plan = []
 		for i, (start_time, _) in enumerate(scene_list):
-			start_frame = min(start_time.get_frames(), total_frames - 1)  # Boundary check
+			start_frame = min(start_time.get_frames(), total_frames - 1)
 			timestamp = start_time.get_seconds()
 			extraction_plan.append((start_frame, i, timestamp))
 		
-		# Sort by frame number for sequential reading
 		extraction_plan.sort(key=lambda x: x[0])
 		
 		frame_paths, frame_numbers, timestamps = [], [], []
-		
-		# 4. OPTIMIZATION: Sequential frame reading with smart seeking
-		logger_config.info(f"Starting optimized frame extraction for {len(extraction_plan)} frames...")
-		
 		current_frame_pos = 0
 		frames_extracted = 0
-		
+
 		for target_frame, scene_index, timestamp in extraction_plan:
-			# Smart seeking: only seek if we're far from target
 			if abs(target_frame - current_frame_pos) > 10:
 				cap.set(cv2.CAP_PROP_POS_FRAMES, target_frame)
 				current_frame_pos = target_frame
 			else:
-				# Skip frames if we're close to target
 				while current_frame_pos < target_frame:
 					cap.read()
 					current_frame_pos += 1
 			
-			# Read the target frame
 			ret, frame = cap.read()
 			if not ret:
 				logger_config.warning(f"Could not read frame {target_frame}")
 				continue
 			
-			# 5. OPTIMIZATION: Immediate processing without thread overhead for small batches
 			try:
 				with Image.fromarray(cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)) as image:
-					# Quick black frame check with reduced resolution
 					if self.is_mostly_black_fast(image):
-						logger_config.info(f"Skipping black frame {target_frame}")
+						logger_config.warning(f"Skipping black frame {target_frame}")
 						continue
 
-					filename = f"scene_{scene_index:03d}_frame_{target_frame}_at_frame_second{timestamp:.2f}frame_second.jpg"
+					frames_extracted += 1
+					filename = f"scene_{frames_extracted:04d}_frame_{target_frame}_at_frame_second{timestamp:.2f}frame_second.jpg"
 					frame_path = os.path.join(frames_dir, filename)
 
-					# OPTIMIZATION: Faster image saving
 					image.save(frame_path, format='JPEG', quality=80, optimize=False)
 					
 					frame_paths.append(frame_path)
 					frame_numbers.append(target_frame)
 					timestamps.append(timestamp)
-					frames_extracted += 1
 					
-					logger_config.info(f"Extracted frame {frames_extracted}/{len(extraction_plan)}", overwrite=True)
+					logger_config.info(f"Extracted {frames_extracted}/{len(extraction_plan)} frames", overwrite=True)
 			
 			except Exception as e:
 				logger_config.error(f"Error processing frame {target_frame}: {e}")
@@ -232,7 +241,7 @@ class TextFrameAligner:
 		
 		cap.release()
 		
-		logger_config.info(f"Extracted {len(frame_paths)} frames using optimized method.")
+		logger_config.info(f"Extracted {len(frame_paths)} frames")
 		
 		# Cache results
 		with open(cache_dir, "w") as f:
@@ -245,25 +254,16 @@ class TextFrameAligner:
 		return frame_paths, frame_numbers, timestamps
 
 	def is_mostly_black_fast(self, image: Image.Image, black_threshold=20, percentage_threshold=0.9):
-		"""
-		Faster black frame detection using downsampling.
-		"""
-		# OPTIMIZATION: Downsample image for faster processing
+		"""Fast black frame detection"""
 		width, height = image.size
 		if width > 200 or height > 200:
-			# Resize to max 200px for faster processing
 			scale = min(200/width, 200/height)
 			new_size = (int(width * scale), int(height * scale))
 			image = image.resize(new_size, Image.LANCZOS)
 		
-		# Convert to grayscale
 		grayscale_image = image.convert('L')
-		
-		# OPTIMIZATION: Use numpy for faster computation
-		import numpy as np
 		pixels = np.array(grayscale_image)
 		
-		# Count black pixels using vectorized operations
 		black_pixel_count = np.sum(pixels < black_threshold)
 		total_pixels = pixels.size
 		
@@ -271,232 +271,308 @@ class TextFrameAligner:
 		return black_percentage >= percentage_threshold
 
 	@torch.inference_mode()
-	def compute_frame_clip_embeddings(self, frame_paths: List[str]) -> torch.Tensor:
-		"""Highly CLIP embedding computation with memory management"""
-		cache_dir = f"{self.cache_path}/compute_frame_clip_embeddings.pt"
+	def compute_frame_vision_embeddings(self, frame_paths: List[str]) -> torch.Tensor:
+		"""Compute vision embeddings (SigLIP/CLIP) with ETA and partial saves."""
+		cache_dir = f"{self.cache_path}/compute_frame_vision_embeddings.pt"
+		partial_dir = os.path.join(self.cache_path, "partial_embeddings")
+		os.makedirs(partial_dir, exist_ok=True)
+
+		# If full cache exists, return it
 		if os.path.exists(cache_dir):
-			logger_config.info("Using cache CLIP image embeddings")
+			logger_config.info("✅ Using cached vision embeddings")
 			return torch.load(cache_dir)
 
-		logger_config.info("Computing CLIP image embeddings")
+		# Check for partial embeddings
+		partial_embeddings = []
+		already_processed = set()
+		for i in range(len(frame_paths)):
+			partial_path = os.path.join(partial_dir, f"embedding_{i+1:04d}.pt")
+			if os.path.exists(partial_path):
+				embedding = torch.load(partial_path)
+				partial_embeddings.append(embedding)
+				already_processed.add(i)
 
-		# Determine optimal batch size based on available VRAM
-		if self.device == "cuda":
-			free_memory = torch.cuda.get_device_properties(0).total_memory - torch.cuda.memory_allocated()
-			batch_size = min(32, max(8, int(free_memory / (512 * 1024 * 1024))))  # Estimate based on memory
-		else:
-			batch_size = 8
+		logger_config.info(f"Resuming from partial cache: {len(already_processed)}/{len(frame_paths)} frames processed")
 
-		logger_config.info(f"Using batch size: {batch_size}")
+		all_embeddings = partial_embeddings
+		times = []
 
-		all_embeddings = []
+		for i in range(len(frame_paths)):
+			if i in already_processed:
+				continue  # Skip already cached
 
-		def load_and_preprocess_batch(paths):
-			"""Image loading and preprocessing"""
-			images = []
-			for path in paths:
-				try:
-					img = Image.open(path)
-					if img.mode != 'RGB':
-						img = img.convert('RGB')
-					images.append(img)
-				except Exception as e:
-					logger_config.warning(f"Failed to load {path}: {e}")
-					continue
-			return images
+			start_time = time.time()
+			with Image.open(frame_paths[i]) as img:
+				inputs = self.vision_processor(
+					text=None, images=[img], return_tensors="pt", padding=True
+				).to(self.device)
 
-		for i in range(0, len(frame_paths), batch_size):
-			batch_paths = frame_paths[i:i + batch_size]
+				with torch.autocast(device_type=self.device, dtype=torch.float16 if self.device == "cuda" else torch.float32):
+					image_features = self.vision_model.get_image_features(pixel_values=inputs.pixel_values)
+					image_features = image_features.float()
 
-			# Load images in parallel
-			with ThreadPoolExecutor(max_workers=min(4, len(batch_paths))) as executor:
-				images = load_and_preprocess_batch(batch_paths)
+				# Move to CPU and save partial embedding
+				embedding_cpu = image_features.cpu()
+				all_embeddings.append(embedding_cpu)
 
-			if not images:
-				continue
+				partial_path = os.path.join(partial_dir, f"embedding_{i+1:04d}.pt")
+				torch.save(embedding_cpu, partial_path)
 
-			# Process with CLIP
-			inputs = self.clip_processor(
-				text=None, images=images, return_tensors="pt", padding=True
-			).to(self.device)
+			# Estimate duration
+			elapsed = time.time() - start_time
+			times.append(elapsed)
+			avg_time = np.mean(times)
+			remaining = avg_time * (len(frame_paths) - i - 1)
+			eta = time.strftime("%H:%M:%S", time.gmtime(remaining))
 
-			# Use mixed precision for faster computation
-			with torch.autocast(device_type=self.device, dtype=torch.float16 if self.device == "cuda" else torch.float32):
-				image_features = self.clip_model.get_image_features(inputs.pixel_values)
-				image_features = image_features.float()  # Convert back to float32 for compatibility
+			logger_config.info(
+				f"Processed {i+1}/{len(frame_paths)} | ETA: {eta} | Frame: {frame_paths[i]}",
+				overwrite=True
+			)
 
-			all_embeddings.append(image_features.cpu())
-
-			# Clean up
-			for img in images:
-				img.close()
+			# Clean up GPU memory
 			del inputs, image_features
-
 			if torch.cuda.is_available():
 				torch.cuda.empty_cache()
 
-			logger_config.debug(f"Processed batch {i//batch_size + 1}/{(len(frame_paths)-1)//batch_size + 1}", overwrite=True)
+		# Combine all embeddings
+		frame_vision_embeddings = torch.cat(all_embeddings, dim=0)
 
-		frame_clip_embeddings = torch.cat(all_embeddings, dim=0)
-		torch.save(frame_clip_embeddings, cache_dir)
-		return frame_clip_embeddings
+		# Save final combined embedding
+		torch.save(frame_vision_embeddings, cache_dir)
+		logger_config.info(f"✅ Saved full embeddings to {cache_dir}")
+
+		return frame_vision_embeddings
 
 	@lru_cache(maxsize=128)
 	def get_cached_sentence_embeddings(self, text: str) -> torch.Tensor:
-		"""Cache sentence embeddings to avoid recomputation"""
+		"""Cache sentence embeddings"""
 		return self.embedder.encode([text], convert_to_tensor=True)
 
 	@lru_cache(maxsize=128)
-	def get_cached_clip_text_embeddings(self, text: str) -> torch.Tensor:
-		"""Cache CLIP text embeddings"""
-		inputs = self.clip_processor(text=[text], images=None, return_tensors="pt", padding=True).to(self.device)
+	def get_cached_vision_text_embeddings(self, text: str) -> torch.Tensor:
+		"""Cache vision model text embeddings"""
+		inputs = self.vision_processor(text=[text], images=None, return_tensors="pt", padding=True).to(self.device)
 		with torch.inference_mode():
-			text_features = self.clip_model.get_text_features(**inputs)
+			text_features = self.vision_model.get_text_features(**inputs)
 		return text_features.cpu()
 
 	def caption_generation(self, frame_paths: List[str], timestamps: List[float]) -> List[str]:
-		"""Captioning with batching and mixed precision"""
 		cache_dir = f"{self.cache_path}/caption_generation.json"
+		partial_dir = os.path.join(self.cache_path, "partial_captions")
+		os.makedirs(partial_dir, exist_ok=True)
+
+		# If full cache exists, return it
 		if os.path.exists(cache_dir):
-			logger_config.info(f"Using cache caption generation for {len(frame_paths)} frames")
+			logger_config.info(f"✅ Using cached captions for {len(frame_paths)} frames")
 			with open(cache_dir, "r") as f:
 				return json.load(f)
 
-		self.load_blip_on_demand()
-		logger_config.info(f"Starting caption generation for {len(frame_paths)} frames")
-		
-		batch_size = 4  # Smaller batch for BLIP to manage memory
+		logger_config.info(f"🚀 Starting caption generation for {len(frame_paths)} frames")
+
+		# Check for partial captions
 		captions = []
-		
-		for i in range(0, len(frame_paths), batch_size):
-			batch_paths = frame_paths[i:i + batch_size]
-			batch_timestamps = timestamps[i:i + batch_size]
-			batch_images = []
+		already_processed = set()
+		for i in range(len(frame_paths)):
+			partial_path = os.path.join(partial_dir, f"caption_{i+1:04d}.json")
+			if os.path.exists(partial_path):
+				with open(partial_path, "r") as f:
+					caption = json.load(f)
+					captions.append(caption)
+					already_processed.add(i)
 
-			# Load batch images
-			for path in batch_paths:
-				try:
-					img = Image.open(path)
-					if img.mode != 'RGB':
-						img = img.convert('RGB')
-					batch_images.append(img)
-				except Exception as e:
-					logger_config.warning(f"Failed to load {path}: {e}")
-					# Use placeholder
-					batch_images.append(Image.new('RGB', (224, 224), color='black'))
+		logger_config.info(f"Resuming from partial cache: {len(already_processed)}/{len(frame_paths)} frames processed")
 
-			# Get subtitle context for batch
-			batch_contexts = []
-			for timestamp in batch_timestamps:
-				relevant_subs = self.get_subtitles_for_timerange(timestamp, timestamp, buffer=1.0)
-				context = " ".join([sub['text'] for sub in relevant_subs[:2]])  # Limit context
-				batch_contexts.append(context[:100] if context else "")  # Truncate
+		times = []
+		# prompt = "What are these?"
+		prompt = "Describe what is happening in this video frame as if you're telling a story. Focus on the main subjects, their actions, the setting, and any important details that would help someone understand the scene's context."
+		from moondream2 import Moondream2
+		from llava_one_vision import LlavaOneVision
+		with Moondream2() as vision_model:
+			for i in range(len(frame_paths)):
+				if i in already_processed:
+					continue  # Skip already cached
 
-			# Process batch
-			batch_captions = []
-			for img, context in zip(batch_images, batch_contexts):
-				try:
-					if context.strip():
-						inputs = self.processor(
-							images=img,
-							text=f"A scene where {context}",
-							return_tensors="pt"
-						).to(self.device)
-					else:
-						inputs = self.processor(images=img, return_tensors="pt").to(self.device)
+				start_time = time.time()
+				with Image.open(frame_paths[i]) as img:
+					result = vision_model.generate(img, prompt)
+					captions.append(result)
 
-					# Use mixed precision and generation
-					with torch.autocast(device_type=self.device, dtype=torch.float16 if self.device == "cuda" else torch.float32):
-						out = self.blip_model.generate(
-							**inputs,
-							max_length=80,  # Reduced for speed
-							num_beams=4,	# Reduced beams
-							length_penalty=0.8,
-							repetition_penalty=1.2,
-							do_sample=False,  # Deterministic for speed
-							early_stopping=True
-						)
-					
-					caption = self.processor.decode(out[0], skip_special_tokens=True)
-					if context.strip():
-						caption = caption.replace(f"A scene where {context}", "").strip()
-					batch_captions.append(caption)
+					# Save partial caption
+					partial_path = os.path.join(partial_dir, f"caption_{i+1:04d}.json")
+					with open(partial_path, "w") as f:
+						json.dump(result, f, indent=4)
 
-				except Exception as e:
-					logger_config.warning(f"Caption generation failed: {e}")
-					batch_captions.append("A scene from the video")
+				# Estimate duration
+				elapsed = time.time() - start_time
+				times.append(elapsed)
+				avg_time = sum(times) / len(times)
+				remaining = avg_time * (len(frame_paths) - i - 1)
+				eta = time.strftime("%H:%M:%S", time.gmtime(remaining))
 
-				img.close()
+				logger_config.info(
+					f"Caption Processed {i+1}/{len(frame_paths)} | ETA: {eta}",
+					overwrite=True
+				)
 
-			captions.extend(batch_captions)
-
-			# Progress logging
-			progress = min(100, (i + batch_size) / len(frame_paths) * 100)
-			logger_config.info(f"Caption progress: {progress:.1f}%", overwrite=True)
-
-		self.unload_blip()
-		logger_config.info(f"Caption generation completed for {len(captions)} frames")
-		with open(cache_dir, 'w') as f:
+		# Save final combined captions
+		with open(cache_dir, "w") as f:
 			json.dump(captions, f, indent=4)
+
+		logger_config.info(f"✅ Saved all captions to {cache_dir}")
 		return captions
 
-	def similarity_computation(self, captions: List[str], query: str) -> Tuple[torch.Tensor, torch.Tensor, np.ndarray]:
-		"""Compute all similarity metrics efficiently in one pass"""
-		
-		# 1. Semantic similarity with caching
-		if query not in self._sentence_cache:
-			self._sentence_cache[query] = self.embedder.encode([query], convert_to_tensor=True)
-		query_emb = self._sentence_cache[query]
-		
-		# Batch encode captions
-		caption_embs = self.embedder.encode(captions, convert_to_tensor=True, batch_size=32)
-		semantic_similarities = util.cos_sim(query_emb, caption_embs)[0]
-		
-		# 2. CLIP similarity with caching
-		if query not in self._clip_text_cache:
-			self._clip_text_cache[query] = self.get_cached_clip_text_embeddings(query)
-		
-		# 3. TF-IDF (only if we have enough captions to make it worthwhile)
-		tfidf_similarities = np.zeros(len(captions))
-		if len(captions) > 5:
-			try:
-				from sklearn.feature_extraction.text import TfidfVectorizer
-				from sklearn.metrics.pairwise import cosine_similarity
-				vectorizer = TfidfVectorizer(
+	def compute_tfidf_similarity(self, captions: List[str], query: str) -> np.ndarray:
+		"""Compute TF-IDF similarity with proper preprocessing"""
+		try:
+			# Preprocess text
+			def preprocess_text(text):
+				text = text.lower()
+				text = text.translate(str.maketrans('', '', string.punctuation))
+				return text
+			
+			processed_captions = [preprocess_text(cap) for cap in captions]
+			processed_query = preprocess_text(query)
+			
+			# Create TF-IDF vectorizer
+			if self._tfidf_vectorizer is None:
+				self._tfidf_vectorizer = TfidfVectorizer(
 					stop_words='english',
 					ngram_range=(1, 2),
-					# max_features=1000,  # Limit features for speed
-					dtype=np.float32	 # Use float32 for speed
+					max_features=5000,
+					min_df=1,
+					max_df=0.8,
+					dtype=np.float32
 				)
-				tfidf_matrix = vectorizer.fit_transform(captions + [query])
-				tfidf_similarities = cosine_similarity(tfidf_matrix[-1:], tfidf_matrix[:-1])[0]
-			except Exception as e:
-				logger_config.warning(f"TF-IDF computation failed: {e}")
+			
+			# Fit on captions + query
+			all_texts = processed_captions + [processed_query]
+			tfidf_matrix = self._tfidf_vectorizer.fit_transform(all_texts)
+			
+			# Compute cosine similarity
+			query_vector = tfidf_matrix[-1]
+			caption_vectors = tfidf_matrix[:-1]
+			
+			similarities = cosine_similarity(query_vector, caption_vectors)[0]
+			
+			# Normalize to 0-1 range
+			if similarities.max() > similarities.min():
+				similarities = (similarities - similarities.min()) / (similarities.max() - similarities.min())
+			
+			return similarities
+			
+		except Exception as e:
+			logger_config.warning(f"TF-IDF computation failed: {e}")
+			return np.zeros(len(captions))
+
+	def compute_subtitle_similarity(self, timestamps: List[float], query: str) -> np.ndarray:
+		"""Compute subtitle similarity scores"""
+		if not self.subtitles or self.subtitle_embeddings is None:
+			return np.zeros(len(timestamps))
 		
-		return semantic_similarities, self._clip_text_cache[query], tfidf_similarities
+		query_embedding = self.get_cached_sentence_embeddings(query)
+		subtitle_scores = np.zeros(len(timestamps))
+		
+		for i, timestamp in enumerate(timestamps):
+			relevant_subs = self.get_subtitles_for_timerange(timestamp, timestamp, buffer=3.0)
+			if relevant_subs:
+				try:
+					# Get subtitle indices
+					sub_indices = []
+					for sub in relevant_subs:
+						try:
+							idx = self.subtitles.index(sub)
+							sub_indices.append(idx)
+						except ValueError:
+							continue
+					
+					if sub_indices:
+						relevant_embeddings = self.subtitle_embeddings[sub_indices]
+						similarities = util.cos_sim(query_embedding, relevant_embeddings)[0]
+						subtitle_scores[i] = float(torch.max(similarities))
+						
+				except Exception as e:
+					logger_config.warning(f"Subtitle similarity computation failed: {e}")
+					continue
+		
+		return subtitle_scores
+
+	def compute_temporal_coherence(self, timestamps: List[float], previous_timestamp: Optional[float] = None) -> np.ndarray:
+		"""Compute temporal coherence scores"""
+		temporal_scores = np.zeros(len(timestamps))
+		
+		if previous_timestamp is None:
+			return temporal_scores
+		
+		timestamps_array = np.array(timestamps)
+		time_diffs = timestamps_array - previous_timestamp
+		
+		# Forward progression bonus (prefer moving forward in time)
+		forward_mask = time_diffs > 0
+		temporal_scores[forward_mask] = np.maximum(
+			0, 1.0 - (time_diffs[forward_mask] / 30.0)
+		)
+		
+		# Backward penalty (discourage going backward)
+		backward_mask = time_diffs <= 0
+		temporal_scores[backward_mask] = -0.3 * np.minimum(
+			1.0, np.abs(time_diffs[backward_mask]) / 10.0
+		)
+		
+		return temporal_scores
+
+	def similarity_computation(self, captions: List[str], timestamps: List[float], query: str, 
+							 frame_vision_embeddings: torch.Tensor, 
+							 previous_timestamp: Optional[float] = None) -> Dict[str, np.ndarray]:
+		"""Compute all similarity metrics"""
+		
+		# 1. Semantic similarity (Sentence Transformer)
+		query_semantic_emb = self.get_cached_sentence_embeddings(query)
+		caption_embeddings = self.embedder.encode(captions, convert_to_tensor=True, batch_size=32)
+		semantic_similarities = util.cos_sim(query_semantic_emb, caption_embeddings)[0].cpu().numpy()
+		
+		# 2. Vision similarity (SigLIP/CLIP)
+		vision_similarities = 0.0
+		if frame_vision_embeddings:
+			query_vision_emb = self.get_cached_vision_text_embeddings(query)
+			vision_similarities = util.cos_sim(query_vision_emb, frame_vision_embeddings)[0].cpu().numpy()
+		
+		# 3. TF-IDF similarity
+		tfidf_similarities = self.compute_tfidf_similarity(captions, query)
+		
+		# 4. Subtitle similarity
+		subtitle_similarities = self.compute_subtitle_similarity(timestamps, query)
+		
+		# 5. Temporal coherence
+		temporal_similarities = self.compute_temporal_coherence(timestamps, previous_timestamp)
+		
+		return {
+			'semantic': semantic_similarities,
+			'vision': vision_similarities,
+			'tfidf': tfidf_similarities,
+			'subtitle': subtitle_similarities,
+			'temporal': temporal_similarities
+		}
 
 	def load_subtitles(self, timestamp_data):
-		"""subtitle loading with pre-computed embeddings"""
-		logger_config.info(f"Loading timestamp_data")
+		"""Load subtitles with pre-computed embeddings"""
+		logger_config.info(f"Loading timestamp data")
 
-		# Pre-compute embeddings in batch
 		if timestamp_data:
 			self.subtitles = timestamp_data
 			subtitle_texts = [sub['text'] for sub in self.subtitles]
 			self.subtitle_embeddings = self.embedder.encode(
 				subtitle_texts,
 				convert_to_tensor=True,
-				batch_size=64  # Larger batch for faster processing
+				batch_size=64
 			)
 			logger_config.info(f"Pre-computed embeddings for {len(subtitle_texts)} subtitles")
 
 	def get_subtitles_for_timerange(self, start_time: float, end_time: float, buffer: float = 2.0) -> List[Dict]:
-		"""subtitle retrieval with binary search"""
+		"""Get subtitles within time range"""
 		if not self.subtitles:
 			return []
 		
-		# Simple linear search is often faster for small datasets
-		# Binary search would be beneficial for very large subtitle files
 		relevant_subs = []
 		for sub in self.subtitles:
 			if sub['end'] >= start_time - buffer and sub['start'] <= end_time + buffer:
@@ -504,50 +580,27 @@ class TextFrameAligner:
 		
 		return relevant_subs
 
-	def find_best_match(self, captions: List[str], timestamps: List[float], query: str, frame_clip_embeddings: torch.Tensor, previous_timestamp: Optional[float] = None, top_k: int = 5) -> List[Tuple[int, float, Dict]]:
-		"""Highly matching with vectorized operations"""
+	def find_best_match(self, captions: List[str], timestamps: List[float], query: str, 
+					   frame_vision_embeddings: torch.Tensor, 
+					   previous_timestamp: Optional[float] = None, 
+					   top_k: int = 5) -> List[Tuple[int, float, Dict]]:
+		"""Find best matching frames with all similarity metrics"""
 
-		# Compute all similarities efficiently
-		semantic_sims, query_clip_emb, tfidf_sims = self.similarity_computation(captions, query)
+		# Compute all similarities
+		similarities = self.similarity_computation(
+			captions, timestamps, query, frame_vision_embeddings, previous_timestamp
+		)
 
-		# CLIP similarity (vectorized)
-		clip_similarities = util.cos_sim(query_clip_emb, frame_clip_embeddings)[0]
+		# Combine scores using weights
+		final_scores = (
+			self.weights['semantic'] * similarities['semantic'] +
+			self.weights['vision'] * similarities['vision'] +
+			self.weights['tfidf'] * similarities['tfidf'] +
+			self.weights['subtitle'] * similarities['subtitle'] +
+			self.weights['temporal'] * similarities['temporal']
+		)
 
-		# Vectorized subtitle similarity computation
-		subtitle_scores = np.zeros(len(timestamps))
-		if self.subtitles and self.subtitle_embeddings is not None:
-			query_sub_emb = self.get_cached_sentence_embeddings(query)
-			for i, timestamp in enumerate(timestamps):
-				relevant_subs = self.get_subtitles_for_timerange(timestamp, timestamp, buffer=3.0)
-				if relevant_subs:
-					# Get indices and compute similarity
-					indices = [self.subtitles.index(sub) for sub in relevant_subs if sub in self.subtitles]
-					if indices:
-						relevant_embeddings = self.subtitle_embeddings[indices]
-						similarities = util.cos_sim(query_sub_emb, relevant_embeddings)[0]
-						subtitle_scores[i] = float(torch.max(similarities))
-
-		# Vectorized temporal coherence
-		temporal_scores = np.zeros(len(timestamps))
-		if previous_timestamp is not None:
-			time_diffs = np.array(timestamps) - previous_timestamp
-			# Forward progression bonus
-			forward_mask = time_diffs > 0
-			temporal_scores[forward_mask] = np.maximum(0, 1.0 - (time_diffs[forward_mask] / 30.0))
-			# Backward penalty
-			backward_mask = time_diffs <= 0
-			temporal_scores[backward_mask] = -0.5 * np.minimum(1.0, np.abs(time_diffs[backward_mask]) / 10.0)
-
-		# Vectorized final score computation
-		semantic_weights = self.weights['semantic'] * semantic_sims.cpu().numpy()
-		clip_weights = self.weights['clip'] * clip_similarities.cpu().numpy()
-		tfidf_weights = self.weights['tfidf'] * tfidf_sims
-		subtitle_weights = self.weights['subtitle'] * subtitle_scores
-		temporal_weights = self.weights['temporal'] * temporal_scores
-
-		final_scores = semantic_weights + clip_weights + tfidf_weights + subtitle_weights + temporal_weights
-
-		# Get top-k indices efficiently
+		# Get top-k indices
 		top_indices = np.argpartition(final_scores, -top_k)[-top_k:]
 		top_indices = top_indices[np.argsort(final_scores[top_indices])[::-1]]
 
@@ -555,22 +608,22 @@ class TextFrameAligner:
 		results = []
 		for idx in top_indices:
 			score_breakdown = {
-				'semantic': float(semantic_sims[idx]),
-				'clip': float(clip_similarities[idx]),
-				'tfidf': float(tfidf_sims[idx]),
-				'subtitle': subtitle_scores[idx],
-				'temporal': temporal_scores[idx],
-				'combined': final_scores[idx]
+				'semantic': float(similarities['semantic'][idx]),
+				# 'vision': float(similarities['vision'][idx]),
+				'tfidf': float(similarities['tfidf'][idx]),
+				'subtitle': float(similarities['subtitle'][idx]),
+				'temporal': float(similarities['temporal'][idx]),
+				'combined': float(final_scores[idx])
 			}
 			results.append((int(idx), float(final_scores[idx]), score_breakdown))
 
 		return results
 
 	def split_recap_sentences(self, text: str) -> List[str]:
-		"""sentence splitting with gemini"""
+		"""Split text into sentences using Gemini"""
 		cache_dir = f"{self.cache_path}/{re.sub(r'[^a-zA-Z]', '', text[:10])}_split_recap_sentences.json"
 		if os.path.exists(cache_dir):
-			logger_config.info("Using cache sentence splitting")
+			logger_config.info("Using cached sentence splitting")
 			with open(cache_dir, "r") as f:
 				return json.load(f)
 
@@ -581,13 +634,13 @@ class TextFrameAligner:
 
 		geminiWrapper = GeminiWrapper(system_instruction=system_prompt)
 		model_responses = geminiWrapper.send_message(text, schema=genai.types.Schema(
-			type = genai.types.Type.OBJECT,
-			required = ["sentences"],
-			properties = {
+			type=genai.types.Type.OBJECT,
+			required=["sentences"],
+			properties={
 				"sentences": genai.types.Schema(
-					type = genai.types.Type.ARRAY,
-					items = genai.types.Schema(
-						type = genai.types.Type.STRING,
+					type=genai.types.Type.ARRAY,
+					items=genai.types.Schema(
+						type=genai.types.Type.STRING,
 					),
 				),
 			},
@@ -599,8 +652,123 @@ class TextFrameAligner:
 			json.dump(sentences, f, indent=4)
 		return sentences
 
+	def match_scenes_online(self, captions, sentences, timestamps, frame_paths, frame_numbers):
+		"""Optimized scene extraction"""
+		match_scene = None
+		cache_dir = f"{self.cache_path}/match_scenes_online.json"
+		if os.path.exists(cache_dir):
+			logger_config.info(f"Using cached match_scenes_online")
+			with open(cache_dir, "r") as f:
+				match_scene = json.load(f)
+
+		if not match_scene:
+			text = f"""Scene Captions:: {captions}
+	Recap Sentences:: {sentences}"""
+			with open("scene_matching_system_prompt.md", 'r') as file:
+				system_prompt = file.read()
+
+			geminiWrapper = GeminiWrapper(system_instruction=system_prompt)
+			model_responses = geminiWrapper.send_message(text, schema=genai.types.Schema(
+				type = genai.types.Type.OBJECT,
+				required = ["data"],
+				properties = {
+					"data": genai.types.Schema(
+						type = genai.types.Type.ARRAY,
+						items = genai.types.Schema(
+							type = genai.types.Type.OBJECT,
+							required = ["scene_caption", "recap_sentence"],
+							properties = {
+								"scene_caption": genai.types.Schema(
+									type = genai.types.Type.STRING,
+								),
+								"recap_sentence": genai.types.Schema(
+									type = genai.types.Type.STRING,
+								),
+							},
+						),
+					),
+				},
+			))
+			match_scene = json.loads(model_responses[0])["data"]
+			# Cache results
+			with open(cache_dir, "w") as f:
+				json.dump(match_scene, f, indent=4)
+
+		self.load_sentence_transformer()
+		sentences_embeddings = self.embedder.encode(sentences, convert_to_tensor=True)
+		result = []
+		for i, data in enumerate(match_scene):
+			query_embedding = self.embedder.encode(data["scene_caption"], convert_to_tensor=True)
+
+			# Compute cosine similarities
+			similarities = util.cos_sim(query_embedding, sentences_embeddings)
+
+			# Find the index of the most similar sentence
+			best_idx = similarities.argmax()
+			best_score = similarities[0, best_idx].item()
+			best_sentence = sentences[best_idx]
+
+			result.append({
+				"recap_sentence": data["recap_sentence"],
+				"frame_second": timestamps[best_idx],
+				"scene_caption": best_sentence,
+			})
+			# Save frame
+			frame_second = frame_paths[best_idx].split("frame_second")[1]
+			output_path = os.path.join(TEMP_DIR, f"sentence_{i+1:02d}_frame_{frame_numbers[best_idx]}_frame_second{frame_second}frame_second.jpg")
+			shutil.copy2(frame_paths[best_idx], output_path)
+
+			# Log progress
+			logger_config.info(f"Aligned {i+1}/{len(sentences)} sentences")
+
+		self.unload_sentence_transformer()
+		return result
+
+	def match_scenes_offline(self, captions, sentences, timestamps, frame_paths, frame_numbers, timestamp_data):
+		# Step 4: Load models
+		self.load_sentence_transformer()
+
+		# Step 5: Load subtitles
+		self.load_subtitles(timestamp_data)
+
+		# Step 6: Compute vision embeddings
+		self.load_vision_model()
+		frame_vision_embeddings = self.compute_frame_vision_embeddings(frame_paths)
+
+		result = []
+		for i, sentence in enumerate(sentences):
+			sentence = sentence.lower()
+			logger_config.info(f"Processing sentence {i+1}/{len(sentences)}: {sentence[:50]}...")
+			
+			# Find best matches for this sentence
+			matches = self.find_best_match(
+				captions, timestamps, sentence, frame_vision_embeddings, 
+				previous_timestamp, top_k=5
+			)
+			
+			best_match = matches[0]
+			best_idx, best_score, score_breakdown = best_match
+			
+			# Update previous timestamp for temporal coherence
+			previous_timestamp = timestamps[best_idx]
+
+			result.append({
+				"recap_sentence": sentence,
+				"frame_second": timestamps[best_idx],
+				"scene_caption": captions[best_idx],
+			})
+			# Save frame
+			frame_second = frame_paths[best_idx].split("frame_second")[1]
+			output_path = os.path.join(TEMP_DIR, f"sentence_{i+1:02d}_frame_{frame_numbers[best_idx]}_frame_second{frame_second}frame_second.jpg")
+			shutil.copy2(frame_paths[best_idx], output_path)
+
+			# Log progress
+			logger_config.info(f"Aligned {i+1}/{len(sentences)} sentences")
+
+		return result
+
 	def process(self, input_json_path: str):
-		"""Fullyprocessing pipeline"""
+		"""Full processing pipeline"""
 		logger_config.info("🚀 STARTING VIDEO-TEXT ALIGNMENT")
 		overall_start = time.time()
 
@@ -614,128 +782,78 @@ class TextFrameAligner:
 
 		self.set_cache_dir(video_path)
 
-		# Step 2: Load SentenceTransformer
-		self.load_sentence_transformer()
-
-		# Step 3: Load subtitles if provided
-		self.load_subtitles(timestamp_data)
-
-		# Step 4:scene extraction
+		# Step 2: Extract scenes
 		frame_paths, frame_numbers, timestamps = self.extract_scenes(video_path)
 
-		self.load_clip_on_demand()
-		# Step 5: Pre-compute CLIP embeddings
-		frame_clip_embeddings = self.compute_frame_clip_embeddings(frame_paths)
-
-		# Step 6:captioning
+		# Step 3: Generate captions
 		captions = self.caption_generation(frame_paths, timestamps)
 
 		# Step 7: Process text
 		sentences = self.split_recap_sentences(recap_text)
 
-		# Step 8:matching
+		# Step 8: Align sentences to frames
+		logger_config.info("🎯 STARTING SENTENCE-FRAME ALIGNMENT")
 		[f.unlink() for f in Path(TEMP_DIR).glob("sentence_*") if f.is_file()]
-		results = []
-		previous_timestamp = None
 
-		for i, sentence in enumerate(sentences):
-			matches = self.find_best_match(
-				captions, timestamps, sentence, frame_clip_embeddings, 
-				previous_timestamp, top_k=5
-			)
+		captions = [s.lower() for s in captions]
+		sentences = [s.lower() for s in sentences]
 
-			best_idx, best_score, score_breakdown = matches[0]
-			timestamp = timestamps[best_idx]
-			frame_num = frame_numbers[best_idx]
+		result = self.match_scenes_online(captions, sentences, timestamps, frame_paths, frame_numbers)
+		# result = self.match_scenes_offline(captions, sentences, timestamps, frame_paths, frame_numbers, timestamp_data)
+		
+		# Save output
+		os.makedirs(TEMP_DIR, exist_ok=True)
+		with open(OUTPUT_JSON, 'w') as f:
+			json.dump(result, f, indent=4)
+		
+		logger_config.info(f"✅ ALIGNMENT COMPLETE! Results saved to {OUTPUT_JSON}")
+		logger_config.info(f"⏱️ Total processing time: {time.time() - overall_start:.2f} seconds")
 
-			# Save frame
-			frame_second = frame_paths[best_idx].split("frame_second")[1]
-			output_path = os.path.join(TEMP_DIR, f"sentence_{i+1:02d}_frame_{frame_num}_frame_second{frame_second}frame_second.jpg")
-			import shutil
-			shutil.copy2(frame_paths[best_idx], output_path)
-
-			relevant_subs = self.get_subtitles_for_timerange(timestamp, timestamp, buffer=2.0)
-
-			results.append({
-				'sentence_id': i + 1,
-				'sentence': sentence,
-				'frame_number': frame_num,
-				'timestamp': timestamp,
-				'caption': captions[best_idx],
-				'score': best_score,
-				'score_breakdown': score_breakdown,
-				'output_path': output_path,
-				'relevant_subtitles': relevant_subs
-			})
-
-			previous_timestamp = timestamp
-
-			logger_config.info(f"Processed sentence {i+1}/{len(sentences)} - Score: {best_score:.4f}", overwrite=True)
-
-		# Save results
-		self.save_enhanced_results(results, OUTPUT_JSON)
-
-		total_time = time.time() - overall_start
-		avg_score = sum(r['score'] for r in results) / len(results) if results else 0
-
-		logger_config.info(f"🎉 PROCESSING COMPLETE!")
-		logger_config.info(f"⚡ Total time: {total_time:.2f}s | Avg score: {avg_score:.4f}")
-
-		return results
+		return result
 
 	def reset(self):
-		"""Reset with better memory management"""
-		logger_config.info("Starting reset")
-
-		# Clear caches
-		self._sentence_cache.clear()
-		self._clip_text_cache.clear()
-
-		# Clear CUDA cache
-		if torch.cuda.is_available():
-			torch.cuda.empty_cache()
-			torch.cuda.synchronize()
-
-		# Force garbage collection
-		gc.collect()
-
-		# Reset temp directory
-		if os.path.exists(TEMP_DIR):
-			import shutil
-			shutil.rmtree(TEMP_DIR)
+		"""Reset cached data and free memory"""
+		logger_config.info("Resetting TextFrameAligner")
+		shutil.rmtree(TEMP_DIR)
 		os.makedirs(TEMP_DIR, exist_ok=True)
 
-		logger_config.info("Reset completed")
+		# Clear cached data
+		self.subtitles = []
+		self.subtitle_embeddings = None
+		self._sentence_cache.clear()
+		self._vision_text_cache.clear()
+		self._tfidf_vectorizer = None
+		
+		# Unload models
+		self.unload_blip()
+		
+		if self.vision_model is not None:
+			del self.vision_model, self.vision_processor
+			self.vision_model = None
+			self.vision_processor = None
+		
+		if self.embedder is not None:
+			del self.embedder
+			self.embedder = None
+		
+		# Clear GPU memory
+		if torch.cuda.is_available():
+			torch.cuda.empty_cache()
+		
+		# Force garbage collection
+		gc.collect()
+		
+		logger_config.info("Reset complete")
 
-	def save_enhanced_results(self, results: List[dict], output_path: str):
-		"""Results saving"""
-		logger_config.info(f"Saving results to: {output_path}")
-
-		json_output = []
-		for result in results:
-			frame_second = result['output_path'].split("frame_second")[1]
-			json_entry = {
-				"frame_path": os.path.abspath(result['output_path']),
-				"frame_second": frame_second,
-				"sentence": result['sentence'],
-				"caption": result['caption'],
-				"timestamp": result['timestamp'],
-				"frame_number": result['frame_number'],
-				"score_breakdown": result.get('score_breakdown', {}),
-				"relevant_subtitles": result.get('relevant_subtitles', [])
-			}
-			json_output.append(json_entry)
-
-		with open(output_path, 'w', encoding='utf-8') as f:
-			json.dump(json_output, f, indent=2, ensure_ascii=False)
-
-		logger_config.info(f"Results saved: {len(json_output)} entries")
-
-
-# Usage example withversion
+# Usage example and main execution
 if __name__ == "__main__":
-	# Initializematcher
-	matcher = TextFrameAligner(max_workers=8)
-
-	# Process with optimizations
-	results = matcher.process("input.json")
+	# Example usage
+	aligner = TextFrameAligner()
+	
+	try:
+		# Process video-text alignment
+		results = aligner.process("input.json")
+		
+	except Exception as e:
+		logger_config.error(f"Processing failed: {e}")
+		raise
