@@ -19,8 +19,10 @@ from functools import lru_cache
 import gc
 from gemiwrap import GeminiWrapper
 from google import genai
+import cv2
+from scenedetect import detect, ContentDetector
 
-os.environ['HF_HOME'] = os.path.abspath(os.path.realpath(os.path.join(os.path.dirname(__file__), './hf_download')))
+# os.environ['HF_HOME'] = os.path.abspath(os.path.realpath(os.path.join(os.path.dirname(__file__), './hf_download')))
 TEMP_DIR = "temp_dir"
 OUTPUT_JSON = f'{TEMP_DIR}/output.json'
 
@@ -108,82 +110,128 @@ class TextFrameAligner:
 			if torch.cuda.is_available():
 				torch.cuda.empty_cache()
 
-	def is_mostly_black(self, img, black_pixel_threshold=0.9, black_rgb_threshold=10):
+	def is_mostly_black(self, image: Image.Image, black_threshold=20, percentage_threshold=0.9):
 		"""
-		Returns True if >= 90% of pixels are near black.
-		`black_rgb_threshold` defines how dark a pixel must be to count as black.
+		A sample implementation for the black frame check.
+		Checks if an image is predominantly black.
 		"""
-		img = img.convert("RGB")
-		pixels = list(img.getdata())
+		# Convert to grayscale for easier analysis
+		grayscale_image = image.convert('L')
+		# Get pixel data
+		pixels = list(grayscale_image.getdata())
+		# Count black pixels
+		black_pixel_count = sum(1 for pixel_value in pixels if pixel_value < black_threshold)
+		# Calculate percentage
 		total_pixels = len(pixels)
-		black_pixels = sum(
-			1 for r, g, b in pixels if r <= black_rgb_threshold and g <= black_rgb_threshold and b <= black_rgb_threshold
-		)
-		return (black_pixels / total_pixels) >= black_pixel_threshold
+		black_percentage = black_pixel_count / total_pixels
+		# Return true if percentage exceeds the threshold
+		return black_percentage >= percentage_threshold
 
-	def extract_scenes(self, video_path: str, threshold: float = 30.0) -> Tuple[List[str], List[int], List[float]]:
-		"""scene extraction with parallel frame processing"""
-		import cv2
-		from scenedetect import detect, ContentDetector
-		logger_config.info(f"Starting scene detection: {video_path}")
-
-		# Scene detection
-		scene_list = detect(video_path, ContentDetector(threshold=threshold), show_progress=True)
-		logger_config.info(f"Found {len(scene_list)} scenes")
-
-		cap = cv2.VideoCapture(video_path)
-		fps = cap.get(cv2.CAP_PROP_FPS)
-		if fps <= 0:
-			raise ValueError("Could not read FPS from video")
-
-		frames_dir = os.path.join(TEMP_DIR, "frames")
-		os.makedirs(frames_dir, exist_ok=True)
-
-		# Prepare frame extraction tasks
-		extraction_tasks = []
-		for i, (start_time, end_time) in enumerate(scene_list):
-			start_frame = start_time.get_frames()
-			extraction_tasks.append((i, start_frame, start_frame / fps))
-
-		cap.release()
-
-		# Parallel frame extraction
-		def extract_single_frame(task):
-			i, frame_num, timestamp = task
-			cap_local = cv2.VideoCapture(video_path)
-			cap_local.set(cv2.CAP_PROP_POS_FRAMES, frame_num)
-			ret, frame = cap_local.read()
-			cap_local.release()
-
-			if not ret:
-				return None
-
+	def _save_frame_task(self, frame_data: tuple) -> Tuple[str, int, float] | None:
+		"""Helper function to be run in a thread. 
+		   Processes and saves a single frame."""
+		frame, scene_index, frame_num, timestamp, frames_dir = frame_data
+		
+		try:
 			with Image.fromarray(cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)) as image:
 				if self.is_mostly_black(image):
+					logger_config.info(f"Skipping mostly black frame {frame_num} for scene {scene_index}.")
 					return None
-				filename = f"scene_{i:03d}_frame_{frame_num}_at_frame_second{timestamp:.2f}frame_second.jpg"
+
+				filename = f"scene_{scene_index:03d}_frame_{frame_num}_at_frame_second{timestamp:.2f}frame_second.jpg"
 				frame_path = os.path.join(frames_dir, filename)
 
 				# Optimize image saving
 				image.save(frame_path, format='JPEG', quality=85, optimize=True)
-				logger_config.info(f"Save:: {frame_path}", overwrite=True)
+				logger_config.info(f"Saved: {frame_path}", overwrite=True)
 
 			return frame_path, frame_num, timestamp
+		except Exception as e:
+			logger_config.error(f"Error processing frame {frame_num}: {e}")
+			return None
 
-		# Use ThreadPoolExecutor for I/O bound operations
+	def extract_scenes(self, video_path: str, threshold: float = 30.0) -> Tuple[List[str], List[int], List[float]]:
+		"""Scene extraction with a fast, single-pass frame extraction."""
+		logger_config.info(f"Starting scene detection: {video_path}")
+
+		# 1. Scene detection (this part remains the same)
+		scene_list = detect(video_path, ContentDetector(threshold=threshold), show_progress=True)
+		if not scene_list:
+			logger_config.warning("No scenes found.")
+			return [], [], []
+		logger_config.info(f"Found {len(scene_list)} scenes")
+
+		cap = cv2.VideoCapture(video_path)
+		if not cap.isOpened():
+			raise IOError(f"Cannot open video file: {video_path}")
+			
+		fps = cap.get(cv2.CAP_PROP_FPS)
+		if fps <= 0:
+			cap.release()
+			raise ValueError("Could not read FPS from video.")
+
+		frames_dir = os.path.join(TEMP_DIR, "frames")
+		os.makedirs(frames_dir, exist_ok=True)
+
+		# 2. Prepare a lookup map for the frames we need to extract
+		# A set for fast lookups (O(1)) and a map for getting metadata
+		frames_to_extract_map = {}
+		for i, (start_time, _) in enumerate(scene_list):
+			start_frame = start_time.get_frames()
+			timestamp = start_time.get_seconds()
+			frames_to_extract_map[start_frame] = (i, timestamp)
+		
+		# A set makes checking if we need the current frame very fast
+		frames_to_extract_set = set(frames_to_extract_map.keys())
+		
 		frame_paths, frame_numbers, timestamps = [], [], []
-		logger_config.info("For overwrite")
+		
+		# 3. Read video once and dispatch saving tasks to a thread pool
 		with ThreadPoolExecutor(max_workers=self.max_workers) as executor:
-			results = list(executor.map(extract_single_frame, extraction_tasks))
+			futures = []
+			current_frame_num = 0
+			
+			logger_config.info(f"Starting single-pass frame extraction for {len(frames_to_extract_set)} frames...")
+			
+			while cap.isOpened():
+				ret, frame = cap.read()
+				if not ret:
+					break # End of video
 
-		for result in results:
-			if result:
-				fp, fn, ts = result
-				frame_paths.append(fp)
-				frame_numbers.append(fn)
-				timestamps.append(ts)
+				if current_frame_num in frames_to_extract_set:
+					scene_index, timestamp = frames_to_extract_map[current_frame_num]
+					
+					# The `frame` object is a NumPy array. We submit it directly.
+					# This avoids any I/O in the worker thread.
+					task_data = (frame, scene_index, current_frame_num, timestamp, frames_dir)
+					future = executor.submit(self._save_frame_task, task_data)
+					futures.append(future)
 
-		logger_config.info(f"Extracted {len(frame_paths)} frames in parallel")
+					# Optimization: Stop reading the video if all desired frames are found
+					frames_to_extract_set.remove(current_frame_num)
+					if not frames_to_extract_set:
+						logger_config.info("All required frames have been dispatched. Stopping video read.")
+						break
+
+				current_frame_num += 1
+
+			# 4. Collect results from the threads
+			for future in futures:
+				result = future.result()
+				if result:
+					fp, fn, ts = result
+					frame_paths.append(fp)
+					frame_numbers.append(fn)
+					timestamps.append(ts)
+		
+		cap.release()
+		
+		# Sort results to maintain a consistent order, as threads may finish unpredictably
+		if frame_paths:
+			sorted_results = sorted(zip(frame_paths, frame_numbers, timestamps), key=lambda x: x[1])
+			frame_paths, frame_numbers, timestamps = [list(t) for t in zip(*sorted_results)]
+
+		logger_config.info(f"Extracted {len(frame_paths)} frames in parallel.")
 		return frame_paths, frame_numbers, timestamps
 
 	@torch.inference_mode()
