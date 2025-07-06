@@ -20,7 +20,6 @@ import gc
 from gemiwrap import GeminiWrapper
 from google import genai
 
-os.environ['HF_HOME'] = os.path.abspath(os.path.realpath(os.path.join(os.path.dirname(__file__), './hf_download')))
 TEMP_DIR = "temp_dir"
 OUTPUT_JSON = f'{TEMP_DIR}/output.json'
 
