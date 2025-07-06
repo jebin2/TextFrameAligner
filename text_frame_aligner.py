@@ -696,6 +696,7 @@ class TextFrameAligner:
 
 		self.load_sentence_transformer()
 		captions_embeddings = self.embedder.encode(captions, convert_to_tensor=True)
+		max_sentences_len = max([len(sent) for sent in sentences]) + 20
 		result = []
 		for i, data in enumerate(match_scene):
 			scene_caption = data["scene_caption"]
@@ -703,6 +704,9 @@ class TextFrameAligner:
 			if len(scene_caption) < len(recap_sentence):
 				scene_caption = data["recap_sentence"]
 				recap_sentence = data["scene_caption"]
+
+			if len(recap_sentence) > max_sentences_len:
+				raise ValueError(f"Invalid sentence:: {recap_sentence}")
 
 			query_embedding = self.embedder.encode(scene_caption, convert_to_tensor=True)
 
