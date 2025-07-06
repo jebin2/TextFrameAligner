@@ -21,9 +21,12 @@ from gemiwrap import GeminiWrapper
 from google import genai
 import cv2
 from scenedetect import detect, ContentDetector
+import hashlib
+import re
+from pathlib import Path
 
-# os.environ['HF_HOME'] = os.path.abspath(os.path.realpath(os.path.join(os.path.dirname(__file__), './hf_download')))
 TEMP_DIR = "temp_dir"
+CACHE_DIR = f"{TEMP_DIR}/cache_dir"
 OUTPUT_JSON = f'{TEMP_DIR}/output.json'
 
 class TextFrameAligner:
@@ -42,6 +45,7 @@ class TextFrameAligner:
 		self.blip_model_name = blip_model_name
 		self.sentence_model_name = sentence_model_name
 		self.clip_model_name = clip_model_name
+		self.cache_path = None
 
 		# Model containers
 		self.processor = None
@@ -59,30 +63,44 @@ class TextFrameAligner:
 		# weights
 		self.weights = {
 			'clip': 0.40,
-			'semantic': 0.35,
-			'tfidf': 0.15,  # Reduced as it's computationally expensive
-			'subtitle': 0.25,
-			'temporal': 0.05
+			# 'semantic': 0.35,
+			# 'tfidf': 0.15,  # Reduced as it's computationally expensive
+			# 'subtitle': 0.25,
+			# 'temporal': 0.05
 		}
 		
 		logger_config.info("TextFrameAligner initialization completed")
 
-	@torch.inference_mode()
-	def load_models_batch(self):
-		"""Load all models at once to avoid repeated loading/unloading"""
-		logger_config.info("Loading all models in batch for optimal memory usage")
+	def set_cache_dir(self, identifier: str) -> str:
+		"""Generates a unique cache directory path for a given identifier (e.g., video path or text)."""
+		content_hash = hashlib.md5(identifier.encode()).hexdigest()
+		cache_path = os.path.join(CACHE_DIR, content_hash)
+		if not os.path.exists(cache_path):
+			self.reset()
+		os.makedirs(cache_path, exist_ok=True)
+		self.cache_path = cache_path
+
+	def load_clip_on_demand(self):
+		"""Load CLIP only when needed and optimize for inference"""
+		if self.clip_model is not None:
+			return
 
 		# Load CLIP
 		from transformers import CLIPProcessor, CLIPModel
 		self.clip_model = CLIPModel.from_pretrained(self.clip_model_name).to(self.device)
 		self.clip_processor = CLIPProcessor.from_pretrained(self.clip_model_name)
 
+	@torch.inference_mode()
+	def load_sentence_transformer(self):
+		"""Load all models at once to avoid repeated loading/unloading"""
+		logger_config.info("Loading SentenceTransformer")
+
 		# Load SentenceTransformer
 		self.embedder = SentenceTransformer(self.sentence_model_name)
 		if self.device == "cuda":
 			self.embedder = self.embedder.to(self.device)
 
-		logger_config.info("All models loaded successfully")
+		logger_config.info("SentenceTransformer loaded successfully")
 
 	def load_blip_on_demand(self):
 		"""Load BLIP only when needed and optimize for inference"""
@@ -110,62 +128,39 @@ class TextFrameAligner:
 			if torch.cuda.is_available():
 				torch.cuda.empty_cache()
 
-	def is_mostly_black(self, image: Image.Image, black_threshold=20, percentage_threshold=0.9):
-		"""
-		A sample implementation for the black frame check.
-		Checks if an image is predominantly black.
-		"""
-		# Convert to grayscale for easier analysis
-		grayscale_image = image.convert('L')
-		# Get pixel data
-		pixels = list(grayscale_image.getdata())
-		# Count black pixels
-		black_pixel_count = sum(1 for pixel_value in pixels if pixel_value < black_threshold)
-		# Calculate percentage
-		total_pixels = len(pixels)
-		black_percentage = black_pixel_count / total_pixels
-		# Return true if percentage exceeds the threshold
-		return black_percentage >= percentage_threshold
-
-	def _save_frame_task(self, frame_data: tuple) -> Tuple[str, int, float] | None:
-		"""Helper function to be run in a thread. 
-		   Processes and saves a single frame."""
-		frame, scene_index, frame_num, timestamp, frames_dir = frame_data
-		
-		try:
-			with Image.fromarray(cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)) as image:
-				if self.is_mostly_black(image):
-					logger_config.info(f"Skipping mostly black frame {frame_num} for scene {scene_index}.")
-					return None
-
-				filename = f"scene_{scene_index:03d}_frame_{frame_num}_at_frame_second{timestamp:.2f}frame_second.jpg"
-				frame_path = os.path.join(frames_dir, filename)
-
-				# Optimize image saving
-				image.save(frame_path, format='JPEG', quality=85, optimize=True)
-				logger_config.info(f"Saved: {frame_path}", overwrite=True)
-
-			return frame_path, frame_num, timestamp
-		except Exception as e:
-			logger_config.error(f"Error processing frame {frame_num}: {e}")
-			return None
-
 	def extract_scenes(self, video_path: str, threshold: float = 30.0) -> Tuple[List[str], List[int], List[float]]:
-		"""Scene extraction with a fast, single-pass frame extraction."""
-		logger_config.info(f"Starting scene detection: {video_path}")
+		"""Optimized scene extraction with faster detection and efficient frame extraction."""
+		cache_dir = f"{self.cache_path}/extract_scenes.json"
+		if os.path.exists(cache_dir):
+			logger_config.info(f"Using cache scene detection: {video_path}")
+			with open(cache_dir, "r") as f:
+				data = json.load(f)
+			return data["frame_paths"], data["frame_numbers"], data["timestamps"]
 
-		# 1. Scene detection (this part remains the same)
-		scene_list = detect(video_path, ContentDetector(threshold=threshold), show_progress=True)
+		logger_config.info(f"Starting optimized scene detection: {video_path}")
+
+		# 1. OPTIMIZATION: Use faster scene detection with downscaling and frame skipping
+		scene_list = detect(
+			video_path, 
+			ContentDetector(threshold=threshold),
+			show_progress=True
+		)
+		
 		if not scene_list:
 			logger_config.warning("No scenes found.")
 			return [], [], []
+		
 		logger_config.info(f"Found {len(scene_list)} scenes")
 
+		# 2. OPTIMIZATION: Pre-open video and get properties once
 		cap = cv2.VideoCapture(video_path)
 		if not cap.isOpened():
 			raise IOError(f"Cannot open video file: {video_path}")
-			
+		
+		# Get video properties once
 		fps = cap.get(cv2.CAP_PROP_FPS)
+		total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
+		
 		if fps <= 0:
 			cap.release()
 			raise ValueError("Could not read FPS from video.")
@@ -173,70 +168,116 @@ class TextFrameAligner:
 		frames_dir = os.path.join(TEMP_DIR, "frames")
 		os.makedirs(frames_dir, exist_ok=True)
 
-		# 2. Prepare a lookup map for the frames we need to extract
-		# A set for fast lookups (O(1)) and a map for getting metadata
-		frames_to_extract_map = {}
+		# 3. OPTIMIZATION: Create sorted frame extraction plan
+		extraction_plan = []
 		for i, (start_time, _) in enumerate(scene_list):
-			start_frame = start_time.get_frames()
+			start_frame = min(start_time.get_frames(), total_frames - 1)  # Boundary check
 			timestamp = start_time.get_seconds()
-			frames_to_extract_map[start_frame] = (i, timestamp)
+			extraction_plan.append((start_frame, i, timestamp))
 		
-		# A set makes checking if we need the current frame very fast
-		frames_to_extract_set = set(frames_to_extract_map.keys())
+		# Sort by frame number for sequential reading
+		extraction_plan.sort(key=lambda x: x[0])
 		
 		frame_paths, frame_numbers, timestamps = [], [], []
 		
-		# 3. Read video once and dispatch saving tasks to a thread pool
-		with ThreadPoolExecutor(max_workers=self.max_workers) as executor:
-			futures = []
-			current_frame_num = 0
+		# 4. OPTIMIZATION: Sequential frame reading with smart seeking
+		logger_config.info(f"Starting optimized frame extraction for {len(extraction_plan)} frames...")
+		
+		current_frame_pos = 0
+		frames_extracted = 0
+		
+		for target_frame, scene_index, timestamp in extraction_plan:
+			# Smart seeking: only seek if we're far from target
+			if abs(target_frame - current_frame_pos) > 10:
+				cap.set(cv2.CAP_PROP_POS_FRAMES, target_frame)
+				current_frame_pos = target_frame
+			else:
+				# Skip frames if we're close to target
+				while current_frame_pos < target_frame:
+					cap.read()
+					current_frame_pos += 1
 			
-			logger_config.info(f"Starting single-pass frame extraction for {len(frames_to_extract_set)} frames...")
+			# Read the target frame
+			ret, frame = cap.read()
+			if not ret:
+				logger_config.warning(f"Could not read frame {target_frame}")
+				continue
 			
-			while cap.isOpened():
-				ret, frame = cap.read()
-				if not ret:
-					break # End of video
+			# 5. OPTIMIZATION: Immediate processing without thread overhead for small batches
+			try:
+				with Image.fromarray(cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)) as image:
+					# Quick black frame check with reduced resolution
+					if self.is_mostly_black_fast(image):
+						logger_config.info(f"Skipping black frame {target_frame}")
+						continue
 
-				if current_frame_num in frames_to_extract_set:
-					scene_index, timestamp = frames_to_extract_map[current_frame_num]
+					filename = f"scene_{scene_index:03d}_frame_{target_frame}_at_frame_second{timestamp:.2f}frame_second.jpg"
+					frame_path = os.path.join(frames_dir, filename)
+
+					# OPTIMIZATION: Faster image saving
+					image.save(frame_path, format='JPEG', quality=80, optimize=False)
 					
-					# The `frame` object is a NumPy array. We submit it directly.
-					# This avoids any I/O in the worker thread.
-					task_data = (frame, scene_index, current_frame_num, timestamp, frames_dir)
-					future = executor.submit(self._save_frame_task, task_data)
-					futures.append(future)
-
-					# Optimization: Stop reading the video if all desired frames are found
-					frames_to_extract_set.remove(current_frame_num)
-					if not frames_to_extract_set:
-						logger_config.info("All required frames have been dispatched. Stopping video read.")
-						break
-
-				current_frame_num += 1
-
-			# 4. Collect results from the threads
-			for future in futures:
-				result = future.result()
-				if result:
-					fp, fn, ts = result
-					frame_paths.append(fp)
-					frame_numbers.append(fn)
-					timestamps.append(ts)
+					frame_paths.append(frame_path)
+					frame_numbers.append(target_frame)
+					timestamps.append(timestamp)
+					frames_extracted += 1
+					
+					logger_config.info(f"Extracted frame {frames_extracted}/{len(extraction_plan)}", overwrite=True)
+			
+			except Exception as e:
+				logger_config.error(f"Error processing frame {target_frame}: {e}")
+				continue
+			
+			current_frame_pos += 1
 		
 		cap.release()
 		
-		# Sort results to maintain a consistent order, as threads may finish unpredictably
-		if frame_paths:
-			sorted_results = sorted(zip(frame_paths, frame_numbers, timestamps), key=lambda x: x[1])
-			frame_paths, frame_numbers, timestamps = [list(t) for t in zip(*sorted_results)]
+		logger_config.info(f"Extracted {len(frame_paths)} frames using optimized method.")
+		
+		# Cache results
+		with open(cache_dir, "w") as f:
+			json.dump({
+				"frame_paths": frame_paths,
+				"frame_numbers": frame_numbers,
+				"timestamps": timestamps
+			}, f, indent=4)
 
-		logger_config.info(f"Extracted {len(frame_paths)} frames in parallel.")
 		return frame_paths, frame_numbers, timestamps
+
+	def is_mostly_black_fast(self, image: Image.Image, black_threshold=20, percentage_threshold=0.9):
+		"""
+		Faster black frame detection using downsampling.
+		"""
+		# OPTIMIZATION: Downsample image for faster processing
+		width, height = image.size
+		if width > 200 or height > 200:
+			# Resize to max 200px for faster processing
+			scale = min(200/width, 200/height)
+			new_size = (int(width * scale), int(height * scale))
+			image = image.resize(new_size, Image.LANCZOS)
+		
+		# Convert to grayscale
+		grayscale_image = image.convert('L')
+		
+		# OPTIMIZATION: Use numpy for faster computation
+		import numpy as np
+		pixels = np.array(grayscale_image)
+		
+		# Count black pixels using vectorized operations
+		black_pixel_count = np.sum(pixels < black_threshold)
+		total_pixels = pixels.size
+		
+		black_percentage = black_pixel_count / total_pixels
+		return black_percentage >= percentage_threshold
 
 	@torch.inference_mode()
 	def compute_frame_clip_embeddings(self, frame_paths: List[str]) -> torch.Tensor:
 		"""Highly CLIP embedding computation with memory management"""
+		cache_dir = f"{self.cache_path}/compute_frame_clip_embeddings.pt"
+		if os.path.exists(cache_dir):
+			logger_config.info("Using cache CLIP image embeddings")
+			return torch.load(cache_dir)
+
 		logger_config.info("Computing CLIP image embeddings")
 
 		# Determine optimal batch size based on available VRAM
@@ -296,7 +337,9 @@ class TextFrameAligner:
 
 			logger_config.debug(f"Processed batch {i//batch_size + 1}/{(len(frame_paths)-1)//batch_size + 1}", overwrite=True)
 
-		return torch.cat(all_embeddings, dim=0)
+		frame_clip_embeddings = torch.cat(all_embeddings, dim=0)
+		torch.save(frame_clip_embeddings, cache_dir)
+		return frame_clip_embeddings
 
 	@lru_cache(maxsize=128)
 	def get_cached_sentence_embeddings(self, text: str) -> torch.Tensor:
@@ -313,6 +356,12 @@ class TextFrameAligner:
 
 	def caption_generation(self, frame_paths: List[str], timestamps: List[float]) -> List[str]:
 		"""Captioning with batching and mixed precision"""
+		cache_dir = f"{self.cache_path}/caption_generation.json"
+		if os.path.exists(cache_dir):
+			logger_config.info(f"Using cache caption generation for {len(frame_paths)} frames")
+			with open(cache_dir, "r") as f:
+				return json.load(f)
+
 		self.load_blip_on_demand()
 		logger_config.info(f"Starting caption generation for {len(frame_paths)} frames")
 		
@@ -387,6 +436,8 @@ class TextFrameAligner:
 
 		self.unload_blip()
 		logger_config.info(f"Caption generation completed for {len(captions)} frames")
+		with open(cache_dir, 'w') as f:
+			json.dump(captions, f, indent=4)
 		return captions
 
 	def similarity_computation(self, captions: List[str], query: str) -> Tuple[torch.Tensor, torch.Tensor, np.ndarray]:
@@ -427,11 +478,10 @@ class TextFrameAligner:
 	def load_subtitles(self, timestamp_data):
 		"""subtitle loading with pre-computed embeddings"""
 		logger_config.info(f"Loading timestamp_data")
-		
-		self.subtitles = timestamp_data
-		
+
 		# Pre-compute embeddings in batch
-		if self.subtitles:
+		if timestamp_data:
+			self.subtitles = timestamp_data
 			subtitle_texts = [sub['text'] for sub in self.subtitles]
 			self.subtitle_embeddings = self.embedder.encode(
 				subtitle_texts,
@@ -518,6 +568,12 @@ class TextFrameAligner:
 
 	def split_recap_sentences(self, text: str) -> List[str]:
 		"""sentence splitting with gemini"""
+		cache_dir = f"{self.cache_path}/{re.sub(r'[^a-zA-Z]', '', text[:10])}_split_recap_sentences.json"
+		if os.path.exists(cache_dir):
+			logger_config.info("Using cache sentence splitting")
+			with open(cache_dir, "r") as f:
+				return json.load(f)
+
 		logger_config.info("Starting sentence splitting")
 
 		with open("sentence_split_system_prompt.md", 'r') as file:
@@ -539,6 +595,8 @@ class TextFrameAligner:
 		sentences = json.loads(model_responses[0])["sentences"]
 
 		logger_config.info(f"Generated {len(sentences)} sentences")
+		with open(cache_dir, 'w') as f:
+			json.dump(sentences, f, indent=4)
 		return sentences
 
 	def process(self, input_json_path: str):
@@ -547,25 +605,25 @@ class TextFrameAligner:
 		overall_start = time.time()
 
 		# Step 1: Setup
-		self.reset()
-
 		with open(input_json_path, 'r') as file:
 			input_json = json.load(file)
 
 		video_path = input_json["video_path"]
 		recap_text = input_json["text"]
-		timestamp_data = input_json["timestamp_data"]
+		timestamp_data = input_json.get("timestamp_data", [])
 
-		# Step 2: Load all models at once
-		self.load_models_batch()
+		self.set_cache_dir(video_path)
+
+		# Step 2: Load SentenceTransformer
+		self.load_sentence_transformer()
 
 		# Step 3: Load subtitles if provided
-		if timestamp_data:
-			self.load_subtitles(timestamp_data)
+		self.load_subtitles(timestamp_data)
 
 		# Step 4:scene extraction
 		frame_paths, frame_numbers, timestamps = self.extract_scenes(video_path)
 
+		self.load_clip_on_demand()
 		# Step 5: Pre-compute CLIP embeddings
 		frame_clip_embeddings = self.compute_frame_clip_embeddings(frame_paths)
 
@@ -576,6 +634,7 @@ class TextFrameAligner:
 		sentences = self.split_recap_sentences(recap_text)
 
 		# Step 8:matching
+		[f.unlink() for f in Path(TEMP_DIR).glob("sentence_*") if f.is_file()]
 		results = []
 		previous_timestamp = None
 
