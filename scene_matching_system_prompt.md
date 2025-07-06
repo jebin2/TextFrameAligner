@@ -1,7 +1,7 @@
 # Task: Scene Caption-Recap Sentence Matching
 
 ## Goal
-Match scene captions to their most relevant recap sentences. Each scene caption must be paired with one corresponding recap sentence, ensuring no recap sentence is used more than once.
+Match recap sentences to their most relevant scene captions. Each recap sentence must be paired with one corresponding scene caption, ensuring no scene caption is used more than once.
 
 ## Input
 - **Scene Captions**: A list of visual descriptions, action sequences, setting details, or situational summaries that describe what is happening in scenes.
@@ -10,23 +10,23 @@ Match scene captions to their most relevant recap sentences. Each scene caption 
 ## Matching Process
 
 ### Match Types (in order of preference):
-1. **Direct**: Recap sentences explicitly describing the same events, actions, or situations depicted in the scene caption.
-2. **Supporting**: Recap sentences that provide context, consequences, or related information directly tied to the visual scene described in the caption.
-3. **Thematic**: Recap sentences providing relevant background, character developments, or narrative elements that contribute to the overall context of the scene caption.
+1. **Direct**: Scene captions explicitly showing the same events, actions, or situations described in the recap sentence.
+2. **Supporting**: Scene captions that provide visual context, consequences, or related information directly tied to the events described in the recap sentence.
+3. **Thematic**: Scene captions providing relevant visual background, character developments, or narrative elements that contribute to the overall context of the recap sentence.
 
 ### Matching Rules:
-- **Required Matching**: Every scene caption must have one recap sentence match.
-- **No Duplicate Usage**: Each recap sentence can only be matched to one scene caption. Once a recap sentence is assigned, it cannot be reused for other scene captions.
-- **Optimal Assignment**: When multiple scene captions could match the same recap sentence, assign it to the scene caption with the strongest relevance score.
-- **Relevance Priority**: Prioritize the most relevant recap sentence for each scene caption from the available (unassigned) recap sentences.
-- **Content Alignment**: Prefer recap sentences that provide meaningful narrative context for the visual scene.
-- **Fallback Strategy**: If the most relevant recap sentence is already assigned, select the next best available match that hasn't been used.
+- **Required Matching**: Every recap sentence must have one scene caption match.
+- **No Duplicate Usage**: Each scene caption can only be matched to one recap sentence. Once a scene caption is assigned, it cannot be reused for other recap sentences.
+- **Optimal Assignment**: When multiple recap sentences could match the same scene caption, assign it to the recap sentence with the strongest relevance score.
+- **Relevance Priority**: Prioritize the most relevant scene caption for each recap sentence from the available (unassigned) scene captions.
+- **Content Alignment**: Prefer scene captions that provide meaningful visual context for the recap sentence.
+- **Fallback Strategy**: If the most relevant scene caption is already assigned, select the next best available match that hasn't been used.
 
 ### Matching Algorithm:
-1. Evaluate all possible scene caption-recap sentence pairs and score their relevance.
+1. Evaluate all possible recap sentence-scene caption pairs and score their relevance.
 2. Sort matches by relevance score (highest first).
-3. Assign matches in order of relevance, skipping any recap sentences already assigned.
-4. Ensure every scene caption receives exactly one match.
+3. Assign matches in order of relevance, skipping any scene captions already assigned.
+4. Ensure every recap sentence receives exactly one match.
 5. If conflicts arise, prioritize matches with higher relevance scores.
 
 ## Output Format (JSON):
@@ -36,14 +36,14 @@ Match scene captions to their most relevant recap sentences. Each scene caption 
 }]
 
 ## Quality Assurance:
-- **Content Verification**: Ensure all recap sentences exist exactly as provided in the source list.
-- **Contextual Relevance**: Ensure the recap sentence meaningfully relates to or explains the scene caption.
-- **Uniqueness Check**: Verify that no recap sentence appears in multiple matches.
-- **Complete Coverage**: Confirm that every scene caption has been matched to exactly one recap sentence.
+- **Content Verification**: Ensure all scene captions exist exactly as provided in the source list.
+- **Contextual Relevance**: Ensure the scene caption meaningfully relates to or visualizes the recap sentence.
+- **Uniqueness Check**: Verify that no scene caption appears in multiple matches.
+- **Complete Coverage**: Confirm that every recap sentence has been matched to exactly one scene caption.
 - **Match Quality**: Review that each match represents the best available option given the constraint of no duplicates.
 
-## Special Considerations for Scene Caption-Recap Matching:
-- **Visual-Narrative Correlation**: Look for recap sentences that explain or provide context for what's shown in the scene.
-- **Cause-Effect Relationships**: Match scenes to recap sentences that describe the consequences or importance of the visual events.
-- **Character Actions**: Align scene captions showing character actions with recap sentences describing those actions or their significance.
-- **Temporal Consistency**: Consider recap sentences that would logically correspond to the timeline of events shown in the scene caption.
+## Special Considerations for Recap Sentence-Scene Caption Matching:
+- **Narrative-Visual Correlation**: Look for scene captions that visually represent or show what's described in the recap sentence.
+- **Cause-Effect Relationships**: Match recap sentences to scene captions that show the visual evidence or consequences of the described events.
+- **Character Actions**: Align recap sentences describing character actions with scene captions showing those actions or their visual results.
+- **Temporal Consistency**: Consider scene captions that would logically correspond to the timeline of events described in the recap sentence.

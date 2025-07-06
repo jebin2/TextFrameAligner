@@ -667,7 +667,7 @@ class TextFrameAligner:
 			with open("scene_matching_system_prompt.md", 'r') as file:
 				system_prompt = file.read()
 
-			geminiWrapper = GeminiWrapper(system_instruction=system_prompt)
+			geminiWrapper = GeminiWrapper(system_instruction=system_prompt, model_name="gemini-2.0-flash")
 			model_responses = geminiWrapper.send_message(text, schema=genai.types.Schema(
 				type = genai.types.Type.OBJECT,
 				required = ["data"],
@@ -695,23 +695,28 @@ class TextFrameAligner:
 				json.dump(match_scene, f, indent=4)
 
 		self.load_sentence_transformer()
-		sentences_embeddings = self.embedder.encode(sentences, convert_to_tensor=True)
+		captions_embeddings = self.embedder.encode(captions, convert_to_tensor=True)
 		result = []
 		for i, data in enumerate(match_scene):
-			query_embedding = self.embedder.encode(data["scene_caption"], convert_to_tensor=True)
+			scene_caption = data["scene_caption"]
+			recap_sentence = data["recap_sentence"]
+			if len(scene_caption) < len(recap_sentence):
+				scene_caption = data["recap_sentence"]
+				recap_sentence = data["scene_caption"]
+
+			query_embedding = self.embedder.encode(scene_caption, convert_to_tensor=True)
 
 			# Compute cosine similarities
-			similarities = util.cos_sim(query_embedding, sentences_embeddings)
+			similarities = util.cos_sim(query_embedding, captions_embeddings)
 
 			# Find the index of the most similar sentence
 			best_idx = similarities.argmax()
-			best_score = similarities[0, best_idx].item()
-			best_sentence = sentences[best_idx]
+			# best_score = similarities[0, best_idx].item()
 
 			result.append({
-				"recap_sentence": data["recap_sentence"],
+				"recap_sentence": recap_sentence,
 				"frame_second": timestamps[best_idx],
-				"scene_caption": best_sentence,
+				"scene_caption": captions[best_idx],
 			})
 			# Save frame
 			frame_second = frame_paths[best_idx].split("frame_second")[1]
