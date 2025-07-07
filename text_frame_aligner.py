@@ -111,6 +111,8 @@ class TextFrameAligner:
 	@torch.inference_mode()
 	def load_sentence_transformer(self):
 		"""Load SentenceTransformer"""
+		if self.embedder is not None:
+			return
 		logger_config.info("Loading SentenceTransformer")
 		self.embedder = SentenceTransformer(self.sentence_model_name)
 		if self.device == "cuda":
@@ -696,36 +698,39 @@ class TextFrameAligner:
 
 		self.load_sentence_transformer()
 		captions_embeddings = self.embedder.encode(captions, convert_to_tensor=True)
-		max_sentences_len = max([len(sent) for sent in sentences]) + 20
+
+		resulted_sentence = [sent["recap_sentence"] for sent in match_scene]
+		resulted_sentences_embeddings = self.embedder.encode(resulted_sentence, convert_to_tensor=True)
+
 		result = []
-		for i, data in enumerate(match_scene):
-			scene_caption = data["scene_caption"]
-			recap_sentence = data["recap_sentence"]
+		max_sentences_len = max([len(sent) for sent in sentences]) + 20
+		for i, curr_sent in enumerate(sentences):
+			query_embedding = self.embedder.encode(curr_sent, convert_to_tensor=True)
+			similarities = util.cos_sim(query_embedding, resulted_sentences_embeddings)
+			resulted_idx = similarities.argmax()
+
+			scene_caption = match_scene[resulted_idx]["scene_caption"]
+			recap_sentence =  match_scene[resulted_idx]["recap_sentence"]
 			if len(scene_caption) < len(recap_sentence):
-				scene_caption = data["recap_sentence"]
-				recap_sentence = data["scene_caption"]
+				scene_caption =  match_scene[resulted_idx]["recap_sentence"]
+				recap_sentence =  match_scene[resulted_idx]["scene_caption"]
 
 			if len(recap_sentence) > max_sentences_len:
 				raise ValueError(f"Invalid sentence:: {recap_sentence}")
 
 			query_embedding = self.embedder.encode(scene_caption, convert_to_tensor=True)
-
-			# Compute cosine similarities
 			similarities = util.cos_sim(query_embedding, captions_embeddings)
-
-			# Find the index of the most similar sentence
-			best_idx = similarities.argmax()
-			# best_score = similarities[0, best_idx].item()
+			frame_idx = similarities.argmax()
 
 			result.append({
-				"recap_sentence": recap_sentence,
-				"frame_second": timestamps[best_idx],
-				"scene_caption": captions[best_idx],
+				"recap_sentence": curr_sent,
+				"frame_second": timestamps[frame_idx],
+				"scene_caption": captions[frame_idx],
 			})
 			# Save frame
-			frame_second = frame_paths[best_idx].split("frame_second")[1]
-			output_path = os.path.join(TEMP_DIR, f"sentence_{i+1:02d}_frame_{frame_numbers[best_idx]}_frame_second{frame_second}frame_second.jpg")
-			shutil.copy2(frame_paths[best_idx], output_path)
+			frame_second = frame_paths[frame_idx].split("frame_second")[1]
+			output_path = os.path.join(TEMP_DIR, f"sentence_{i+1:02d}_frame_{frame_numbers[frame_idx]}_frame_second{frame_second}frame_second.jpg")
+			shutil.copy2(frame_paths[frame_idx], output_path)
 
 			# Log progress
 			logger_config.info(f"Aligned {i+1}/{len(sentences)} sentences")
@@ -807,8 +812,19 @@ class TextFrameAligner:
 		captions = [s.lower() for s in captions]
 		sentences = [s.lower() for s in sentences]
 
-		result = self.match_scenes_online(captions, sentences, timestamps, frame_paths, frame_numbers)
-		# result = self.match_scenes_offline(captions, sentences, timestamps, frame_paths, frame_numbers, timestamp_data)
+		try_times = 2
+		result = None
+
+		while (result is None or len(result) == 0) and try_times > 0:
+			try:
+				result = self.match_scenes_online(captions, sentences, timestamps, frame_paths, frame_numbers)
+				# result = self.match_scenes_offline(captions, sentences, timestamps, frame_paths, frame_numbers, timestamp_data)
+			except Exception as e:
+				logger_config.error(str(e))
+				try_times -=1
+
+		if (result is None or len(result) == 0):
+			raise ValueError("Result is empty")
 		
 		# Save output
 		os.makedirs(TEMP_DIR, exist_ok=True)
