@@ -207,6 +207,8 @@ marimo/_lsp/
 __marimo__/
 temp_dir
 input.mkv
+input.mp4
+input.json
 subtitle.json
 hf_download
 temp.py
