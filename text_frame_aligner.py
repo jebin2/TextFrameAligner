@@ -28,6 +28,7 @@ import string
 import shutil
 from gemiwrap import GeminiWrapper
 import ffmpeg
+import traceback
 
 TEMP_DIR = "temp_dir"
 CACHE_DIR = f"{TEMP_DIR}/cache_dir"
@@ -227,12 +228,12 @@ class TextFrameAligner:
 				timestamp = start_time.get_seconds()
 				extract_frame(i, timestamp, start_time.get_frames())
 
-			# Cache scene detection results
-			with open(cache_dir, "w") as f:
-				json.dump({
-					"frame_paths": frame_paths,
-					"frame_numbers": frame_numbers,
-					"timestamps": timestamps
+		# Cache scene detection results
+		with open(cache_dir, "w") as f:
+			json.dump({
+				"frame_paths": frame_paths,
+				"frame_numbers": frame_numbers,
+				"timestamps": timestamps
 				}, f, indent=4)
 
 		logger_config.info(f"Extracted {len(frame_paths)} frames (ffmpeg-python)")
@@ -711,8 +712,7 @@ class TextFrameAligner:
 				"scene_caption": captions[frame_idx],
 			})
 			# Save frame
-			frame_second = frame_paths[frame_idx].split("frame_second")[1]
-			output_path = os.path.join(TEMP_DIR, f"sentence_{i+1:02d}_frame_{frame_numbers[frame_idx]}_frame_second{frame_second}frame_second.jpg")
+			output_path = os.path.join(TEMP_DIR, f"sentence_{i+1:02d}_frame_{frame_numbers[frame_idx]}.jpg")
 			shutil.copy2(frame_paths[frame_idx], output_path)
 
 			# Log progress
@@ -804,7 +804,7 @@ class TextFrameAligner:
 				result = self.match_scenes_online(captions, sentences, timestamps, frame_paths, frame_numbers)
 				# result = self.match_scenes_offline(captions, sentences, timestamps, frame_paths, frame_numbers, timestamp_data)
 			except Exception as e:
-				logger_config.error(str(e))
+				logger_config.error(f'{str(e)} {traceback.format_exc()}')
 				try_times -=1
 
 		if (result is None or len(result) == 0):
