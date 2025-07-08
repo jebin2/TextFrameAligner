@@ -18,7 +18,6 @@ from functools import lru_cache
 import gc
 from gemiwrap import GeminiWrapper
 from google import genai
-import cv2
 from scenedetect import detect, ContentDetector
 import hashlib
 import re
@@ -28,6 +27,7 @@ from sklearn.metrics.pairwise import cosine_similarity
 import string
 import shutil
 from gemiwrap import GeminiWrapper
+import ffmpeg
 
 TEMP_DIR = "temp_dir"
 CACHE_DIR = f"{TEMP_DIR}/cache_dir"
@@ -155,7 +155,7 @@ class TextFrameAligner:
 				torch.cuda.empty_cache()
 
 	def extract_scenes(self, video_path: str, frame_timestamp: List[float], threshold: float = 30.0) -> Tuple[List[str], List[int], List[float]]:
-		"""Optimized scene extraction or direct timestamp-based frame extraction"""
+		"""Optimized scene extraction or direct timestamp-based frame extraction using ffmpeg-python"""
 		cache_dir = f"{self.cache_path}/extract_scenes.json"
 
 		# If cache exists and frame_timestamp is empty, use cached scene detection
@@ -165,123 +165,67 @@ class TextFrameAligner:
 				data = json.load(f)
 			return data["frame_paths"], data["frame_numbers"], data["timestamps"]
 
-		logger_config.info(f"Starting frame extraction: {video_path}")
-
-		cap = cv2.VideoCapture(video_path)
-		if not cap.isOpened():
-			raise IOError(f"Cannot open video file: {video_path}")
-
-		fps = cap.get(cv2.CAP_PROP_FPS)
-		total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
-		duration = total_frames / fps if fps > 0 else 0
-
-		if fps <= 0:
-			cap.release()
-			raise ValueError("Could not read FPS from video.")
+		logger_config.info(f"Starting frame extraction (ffmpeg-python): {video_path}")
 
 		frames_dir = os.path.join(TEMP_DIR, "frames")
+		shutil.rmtree(frames_dir, ignore_errors=True)
 		os.makedirs(frames_dir, exist_ok=True)
 
 		frame_paths, frame_numbers, timestamps = [], [], []
 		frames_extracted = 0
 
+		# 🔥 Common function for extracting one frame
+		def extract_frame(index: int, timestamp: float, frame_number: int):
+			nonlocal frames_extracted
+			filename = f"scene_{index+1:04d}_at_{timestamp:.2f}s.jpg"
+			frame_path = os.path.join(frames_dir, filename)
+
+			# Use ffmpeg to extract the frame
+			(
+				ffmpeg
+				.input(video_path, ss=timestamp)
+				.output(frame_path, vframes=1, qscale=2)
+				.overwrite_output()
+				.run(quiet=True)
+			)
+
+			# Open image and check for mostly black frame
+			with Image.open(frame_path) as image:
+				if self.is_mostly_black_fast(image):
+					logger_config.warning(f"Skipping black frame at {timestamp:.2f}s")
+					os.remove(frame_path)
+					return False
+
+			# If frame is good, store it
+			frames_extracted += 1
+			frame_paths.append(frame_path)
+			frame_numbers.append(frame_number)
+			timestamps.append(timestamp)
+
+			logger_config.info(f"Extracted frame {frames_extracted} at {timestamp:.2f}s", overwrite=True)
+			return True
+
 		# CASE 1: Extract frames at given timestamps
 		if frame_timestamp:
 			logger_config.info(f"Extracting {len(frame_timestamp)} frames at specific timestamps")
-
 			for i, timestamp in enumerate(frame_timestamp):
-				if timestamp > duration:
-					logger_config.warning(f"Skipping timestamp {timestamp:.2f}s (beyond video duration)")
-					continue
-
-				target_frame = int(timestamp * fps)
-				cap.set(cv2.CAP_PROP_POS_FRAMES, target_frame)
-				ret, frame = cap.read()
-				if not ret:
-					logger_config.warning(f"Could not read frame at {timestamp:.2f}s (frame {target_frame})")
-					continue
-
-				try:
-					with Image.fromarray(cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)) as image:
-						if self.is_mostly_black_fast(image):
-							logger_config.warning(f"Skipping black frame at {timestamp:.2f}s (frame {target_frame})")
-							continue
-
-						frames_extracted += 1
-						filename = f"timestamp_{frames_extracted:04d}_frame_{target_frame}_at_{timestamp:.2f}s.jpg"
-						frame_path = os.path.join(frames_dir, filename)
-
-						image.save(frame_path, format='JPEG', quality=80, optimize=False)
-
-						frame_paths.append(frame_path)
-						frame_numbers.append(target_frame)
-						timestamps.append(timestamp)
-
-						logger_config.info(f"Extracted frame {frames_extracted}/{len(frame_timestamp)} at {timestamp:.2f}s")
-				except Exception as e:
-					logger_config.error(f"Error processing frame at {timestamp:.2f}s: {e}")
-					continue
+				extract_frame(i, timestamp, int(timestamp * 1000))  # ms as pseudo-frame number
 
 		# CASE 2: Perform scene detection if frame_timestamp is empty
 		else:
 			scene_list = detect(
-				video_path, 
+				video_path,
 				ContentDetector(threshold=threshold),
 				show_progress=True
 			)
 
 			if not scene_list:
-				logger_config.warning("No scenes found.")
-				cap.release()
-				return [], [], []
+				raise Exception("No scenes found.")
 
 			logger_config.info(f"Found {len(scene_list)} scenes")
-
-			extraction_plan = []
 			for i, (start_time, _) in enumerate(scene_list):
-				start_frame = min(start_time.get_frames(), total_frames - 1)
 				timestamp = start_time.get_seconds()
-				extraction_plan.append((start_frame, i, timestamp))
-
-			extraction_plan.sort(key=lambda x: x[0])
-			current_frame_pos = 0
-
-			for target_frame, scene_index, timestamp in extraction_plan:
-				if abs(target_frame - current_frame_pos) > 10:
-					cap.set(cv2.CAP_PROP_POS_FRAMES, target_frame)
-					current_frame_pos = target_frame
-				else:
-					while current_frame_pos < target_frame:
-						cap.read()
-						current_frame_pos += 1
-
-				ret, frame = cap.read()
-				if not ret:
-					logger_config.warning(f"Could not read frame {target_frame}")
-					continue
-
-				try:
-					with Image.fromarray(cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)) as image:
-						if self.is_mostly_black_fast(image):
-							logger_config.warning(f"Skipping black frame {target_frame}")
-							continue
-
-						frames_extracted += 1
-						filename = f"scene_{frames_extracted:04d}_frame_{target_frame}_at_{timestamp:.2f}s.jpg"
-						frame_path = os.path.join(frames_dir, filename)
-
-						image.save(frame_path, format='JPEG', quality=80, optimize=False)
-
-						frame_paths.append(frame_path)
-						frame_numbers.append(target_frame)
-						timestamps.append(timestamp)
-
-						logger_config.info(f"Extracted {frames_extracted}/{len(extraction_plan)} frames", overwrite=True)
-				except Exception as e:
-					logger_config.error(f"Error processing frame {target_frame}: {e}")
-					continue
-
-				current_frame_pos += 1
+				extract_frame(i, timestamp, start_time.get_frames())
 
 			# Cache scene detection results
 			with open(cache_dir, "w") as f:
@@ -291,10 +235,8 @@ class TextFrameAligner:
 					"timestamps": timestamps
 				}, f, indent=4)
 
-		cap.release()
-		logger_config.info(f"Extracted {len(frame_paths)} frames")
+		logger_config.info(f"Extracted {len(frame_paths)} frames (ffmpeg-python)")
 		return frame_paths, frame_numbers, timestamps
-
 
 	def is_mostly_black_fast(self, image: Image.Image, black_threshold=20, percentage_threshold=0.9):
 		"""Fast black frame detection"""
