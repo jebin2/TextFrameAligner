@@ -823,7 +823,7 @@ class TextFrameAligner:
 	def reset(self):
 		"""Reset cached data and free memory"""
 		logger_config.info("Resetting TextFrameAligner")
-		shutil.rmtree(TEMP_DIR)
+		shutil.rmtree(TEMP_DIR, ignore_errors=True)
 		os.makedirs(TEMP_DIR, exist_ok=True)
 
 		# Clear cached data
