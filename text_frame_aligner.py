@@ -176,9 +176,9 @@ class TextFrameAligner:
 		frames_extracted = 0
 
 		# 🔥 Common function for extracting one frame
-		def extract_frame(index: int, timestamp: float, frame_number: int):
+		def extract_frame(timestamp: float, frame_number: int):
 			nonlocal frames_extracted
-			filename = f"scene_{index+1:04d}_at_{timestamp:.2f}s.jpg"
+			filename = f"scene_{frames_extracted+1:04d}_at_{timestamp:.2f}s.jpg"
 			frame_path = os.path.join(frames_dir, filename)
 
 			# Use ffmpeg to extract the frame
@@ -187,7 +187,7 @@ class TextFrameAligner:
 				.input(video_path, ss=timestamp)
 				.output(frame_path, vframes=1, qscale=2)
 				.overwrite_output()
-				.run(quiet=True)
+				.run()
 			)
 
 			# Open image and check for mostly black frame
@@ -209,8 +209,8 @@ class TextFrameAligner:
 		# CASE 1: Extract frames at given timestamps
 		if frame_timestamp:
 			logger_config.info(f"Extracting {len(frame_timestamp)} frames at specific timestamps")
-			for i, timestamp in enumerate(frame_timestamp):
-				extract_frame(i, timestamp, int(timestamp * 1000))  # ms as pseudo-frame number
+			for timestamp in frame_timestamp:
+				extract_frame(timestamp, int(timestamp * 1000))  # ms as pseudo-frame number
 
 		# CASE 2: Perform scene detection if frame_timestamp is empty
 		else:
@@ -224,9 +224,9 @@ class TextFrameAligner:
 				raise Exception("No scenes found.")
 
 			logger_config.info(f"Found {len(scene_list)} scenes")
-			for i, (start_time, _) in enumerate(scene_list):
+			for (start_time, _) in scene_list:
 				timestamp = start_time.get_seconds()
-				extract_frame(i, timestamp, start_time.get_frames())
+				extract_frame(timestamp, start_time.get_frames())
 
 		# Cache scene detection results
 		with open(cache_dir, "w") as f:
@@ -700,6 +700,7 @@ class TextFrameAligner:
 				recap_sentence =  match_scene[resulted_idx]["scene_caption"]
 
 			if len(recap_sentence) > max_sentences_len:
+				os.remove(cache_dir)
 				raise ValueError(f"Invalid sentence:: {recap_sentence}")
 
 			query_embedding = self.embedder.encode(scene_caption, convert_to_tensor=True)

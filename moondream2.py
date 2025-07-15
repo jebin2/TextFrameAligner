@@ -17,12 +17,20 @@ class Moondream2(VisionModel):
 		with torch.inference_mode():
 			return self.model.caption(image, length="normal")["caption"]
 
+	def query(self, image: Image.Image, text: str = "") -> str:
+		with torch.inference_mode():
+			return self.model.point(image, text)["answer"]
+
+	def point(self, image: Image.Image, text: str = "") -> str:
+		with torch.inference_mode():
+			return self.model.point(image, text)["points"]
+
 if __name__ == "__main__":
 	model = Moondream2()
-	image = Image.open("temp_dir/frames/scene_004_frame_935_at_frame_second39.00frame_second.jpg")
-	text = None
+	image = Image.open("../CaptionCreator/media/comic_review/Bloodletter #1 (2025)/Bloodletter 001-0007.jpg")
+	text = "How many panels are in this comic page"
 	start_time = time.time()
-	response = model.generate(image, text)
+	response = model.query(image, text)
 	end_time = time.time()
 	print("Moondream2:", response)
 	print(f"⏱ Total time taken: {end_time - start_time:.2f} seconds")
