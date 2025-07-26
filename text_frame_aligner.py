@@ -187,7 +187,7 @@ class TextFrameAligner:
 				.input(video_path, ss=timestamp)
 				.output(frame_path, vframes=1, qscale=2)
 				.overwrite_output()
-				.run()
+				.run(quiet=True, capture_stdout=True, capture_stderr=True)
 			)
 
 			# Open image and check for mostly black frame
@@ -343,7 +343,7 @@ class TextFrameAligner:
 			text_features = self.vision_model.get_text_features(**inputs)
 		return text_features.cpu()
 
-	def caption_generation(self, frame_paths: List[str], timestamps: List[float]) -> List[str]:
+	def caption_generation(self, frame_paths: List[str]) -> List[str]:
 		cache_dir = f"{self.cache_path}/caption_generation.json"
 		partial_dir = os.path.join(self.cache_path, "partial_captions")
 		os.makedirs(partial_dir, exist_ok=True)
@@ -641,7 +641,7 @@ class TextFrameAligner:
 	def match_scenes_online(self, captions, sentences, timestamps, frame_paths, frame_numbers):
 		"""Optimized scene extraction"""
 		match_scene = None
-		cache_dir = f"{self.cache_path}/match_scenes_online.json"
+		cache_dir = f"{self.cache_path}/{re.sub(r'[^a-zA-Z]', '', sentences[0][:10])}_match_scenes_online.json"
 		if os.path.exists(cache_dir):
 			logger_config.info(f"Using cached match_scenes_online")
 			with open(cache_dir, "r") as f:
@@ -710,6 +710,7 @@ class TextFrameAligner:
 			result.append({
 				"recap_sentence": curr_sent,
 				"frame_second": timestamps[frame_idx],
+				"frame_path": frame_paths[frame_idx],
 				"scene_caption": captions[frame_idx],
 			})
 			# Save frame
@@ -777,15 +778,19 @@ class TextFrameAligner:
 		video_path = input_json["video_path"]
 		recap_text = input_json["text"]
 		frame_timestamp = input_json.get("frame_timestamp", [])
-		timestamp_data = input_json.get("timestamp_data", [])
+		frame_paths = input_json.get("frame_paths", [])
 
 		self.set_cache_dir(video_path)
 
-		# Step 2: Extract scenes
-		frame_paths, frame_numbers, timestamps = self.extract_scenes(video_path, frame_timestamp)
+		if not frame_paths:
+			# Step 2: Extract scenes
+			frame_paths, frame_numbers, timestamps = self.extract_scenes(video_path, frame_timestamp)
+		else:
+			frame_numbers = [i+1 for i in range(len(frame_paths))]
+			timestamps = [0 for _ in range(len(frame_paths))]
 
 		# Step 3: Generate captions
-		captions = self.caption_generation(frame_paths, timestamps)
+		captions = self.caption_generation(frame_paths)
 
 		# Step 7: Process text
 		sentences = self.split_recap_sentences(recap_text)
@@ -812,7 +817,6 @@ class TextFrameAligner:
 			raise ValueError("Result is empty")
 		
 		# Save output
-		os.makedirs(TEMP_DIR, exist_ok=True)
 		with open(OUTPUT_JSON, 'w') as f:
 			json.dump(result, f, indent=4)
 		
