@@ -859,6 +859,58 @@ class TextFrameAligner:
 		
 		logger_config.info("Reset complete")
 
+	def cleanup(self):
+		"""Clean up model and related resources."""
+		try:
+			print("Cleaning up resources...")
+
+			# Dereference all components
+			self.processor = None
+			self.blip_model = None
+			self.vision_processor = None
+			self.vision_model = None
+			self.embedder = None
+
+			if hasattr(self, 'processor') and self.processor is not None:
+				self.processor = None
+				print("processor reference cleared.")
+			if hasattr(self, 'vision_processor') and self.vision_processor is not None:
+				self.vision_processor = None
+				print("vision_processor reference cleared.")
+			if hasattr(self, 'vision_model') and self.vision_model is not None:
+				self.vision_model = None
+				print("vision_model reference cleared.")
+			if hasattr(self, 'embedder') and self.embedder is not None:
+				self.embedder = None
+				print("embedder reference cleared.")
+
+			# Run garbage collection
+			gc.collect()
+
+			# Free CUDA memory if applicable
+			try:
+				import torch
+				if torch.cuda.is_available():
+					torch.cuda.empty_cache()
+					torch.cuda.ipc_collect()
+					print("CUDA memory cleaned.")
+			except ImportError:
+				print("Torch not available; skipped GPU cleanup.")
+
+			print("Cleanup completed successfully.")
+
+		except Exception as e:
+			print(f"Error during cleanup: {e}")
+
+	def __enter__(self):
+		return self
+
+	def __exit__(self, exc_type, exc_val, exc_tb):
+		self.cleanup()
+
+	def __del__(self):
+		self.cleanup()
+
 # Usage example and main execution
 if __name__ == "__main__":
 	# Example usage
