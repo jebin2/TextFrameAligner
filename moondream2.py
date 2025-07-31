@@ -19,7 +19,7 @@ class Moondream2(VisionModel):
 
 	def query(self, image: Image.Image, text: str = "") -> str:
 		with torch.inference_mode():
-			return self.model.point(image, text)["answer"]
+			return self.model.query(image, text)["answer"]
 
 	def point(self, image: Image.Image, text: str = "") -> str:
 		with torch.inference_mode():

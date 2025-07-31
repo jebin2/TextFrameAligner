@@ -632,6 +632,13 @@ class TextFrameAligner:
 			},
 		))
 		sentences = json.loads(model_responses[0])["sentences"]
+		joined_processed = " ".join(sentences).strip()
+		original = text.strip()
+
+		import difflib
+		similarity = difflib.SequenceMatcher(None, joined_processed, original).ratio()
+		if similarity < 0.9:
+			raise ValueError(f"process_narration_text is not correct:: similarity-{similarity}")
 
 		logger_config.info(f"Generated {len(sentences)} sentences")
 		with open(cache_dir, 'w') as f:
