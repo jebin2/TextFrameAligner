@@ -42,27 +42,8 @@ Split text into complete, meaningful sentences that can stand alone as coherent 
 ## Input Format:
 The user will provide a paragraph of text.
 
-## Output Format:
+## Output JSON Format:
 Return only a JSON array of strings, with no explanations or additional text:
 
-```json
 ["sentence 1", "sentence 2", "sentence 3", ...]
-```
-
-## Examples:
-
-**Input:** "Dr. Smith went to the store. He bought milk, bread, and eggs; however, he forgot the butter."
-
-**Output:** 
-```json
-["Dr. Smith went to the store.", "He bought milk, bread, and eggs; however, he forgot the butter."]
-```
-
-**Input:** "The meeting is at 3.30 p.m. Please bring your laptops. Don't forget the chargers!"
-
-**Output:**
-```json
-["The meeting is at 3.30 p.m.", "Please bring your laptops.", "Don't forget the chargers!"]
-```
-
 Remember: Your goal is intelligent sentence splitting based on meaning, not just punctuation-based splitting.
