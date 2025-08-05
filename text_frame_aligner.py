@@ -18,7 +18,6 @@ from functools import lru_cache
 import gc
 from gemiwrap import GeminiWrapper
 from google import genai
-from scenedetect import detect, ContentDetector
 import hashlib
 import re
 from pathlib import Path
@@ -27,10 +26,11 @@ from sklearn.metrics.pairwise import cosine_similarity
 import string
 import shutil
 from gemiwrap import GeminiWrapper
-import ffmpeg
+from extract_scenes import extract_scenes as extract_scenes_method
 import traceback
+from aistudio_ui_handler import run_gemini_generation
 
-TEMP_DIR = "temp_dir"
+TEMP_DIR = os.path.abspath("temp_dir")
 CACHE_DIR = f"{TEMP_DIR}/cache_dir"
 OUTPUT_JSON = f'{TEMP_DIR}/output.json'
 
@@ -155,107 +155,6 @@ class TextFrameAligner:
 			if torch.cuda.is_available():
 				torch.cuda.empty_cache()
 
-	def extract_scenes(self, video_path: str, frame_timestamp: List[float], threshold: float = 30.0) -> Tuple[List[str], List[int], List[float]]:
-		"""Optimized scene extraction or direct timestamp-based frame extraction using ffmpeg-python"""
-		cache_dir = f"{self.cache_path}/extract_scenes.json"
-
-		# If cache exists and frame_timestamp is empty, use cached scene detection
-		if os.path.exists(cache_dir) and not frame_timestamp:
-			logger_config.info(f"Using cached scene detection: {video_path}")
-			with open(cache_dir, "r") as f:
-				data = json.load(f)
-			return data["frame_paths"], data["frame_numbers"], data["timestamps"]
-
-		logger_config.info(f"Starting frame extraction (ffmpeg-python): {video_path}")
-
-		frames_dir = os.path.join(TEMP_DIR, "frames")
-		shutil.rmtree(frames_dir, ignore_errors=True)
-		os.makedirs(frames_dir, exist_ok=True)
-
-		frame_paths, frame_numbers, timestamps = [], [], []
-		frames_extracted = 0
-
-		# 🔥 Common function for extracting one frame
-		def extract_frame(timestamp: float, frame_number: int):
-			nonlocal frames_extracted
-			filename = f"scene_{frames_extracted+1:04d}_at_{timestamp:.2f}s.jpg"
-			frame_path = os.path.join(frames_dir, filename)
-
-			# Use ffmpeg to extract the frame
-			(
-				ffmpeg
-				.input(video_path, ss=timestamp)
-				.output(frame_path, vframes=1, qscale=2)
-				.overwrite_output()
-				.run(quiet=True, capture_stdout=True, capture_stderr=True)
-			)
-
-			# Open image and check for mostly black frame
-			with Image.open(frame_path) as image:
-				if self.is_mostly_black_fast(image):
-					logger_config.warning(f"Skipping black frame at {timestamp:.2f}s")
-					os.remove(frame_path)
-					return False
-
-			# If frame is good, store it
-			frames_extracted += 1
-			frame_paths.append(frame_path)
-			frame_numbers.append(frame_number)
-			timestamps.append(timestamp)
-
-			logger_config.info(f"Extracted frame {frames_extracted} at {timestamp:.2f}s", overwrite=True)
-			return True
-
-		# CASE 1: Extract frames at given timestamps
-		if frame_timestamp:
-			logger_config.info(f"Extracting {len(frame_timestamp)} frames at specific timestamps")
-			for timestamp in frame_timestamp:
-				extract_frame(timestamp, int(timestamp * 1000))  # ms as pseudo-frame number
-
-		# CASE 2: Perform scene detection if frame_timestamp is empty
-		else:
-			scene_list = detect(
-				video_path,
-				ContentDetector(threshold=threshold),
-				show_progress=True
-			)
-
-			if not scene_list:
-				raise Exception("No scenes found.")
-
-			logger_config.info(f"Found {len(scene_list)} scenes")
-			for (start_time, _) in scene_list:
-				timestamp = start_time.get_seconds()
-				extract_frame(timestamp, start_time.get_frames())
-
-		# Cache scene detection results
-		with open(cache_dir, "w") as f:
-			json.dump({
-				"frame_paths": frame_paths,
-				"frame_numbers": frame_numbers,
-				"timestamps": timestamps
-				}, f, indent=4)
-
-		logger_config.info(f"Extracted {len(frame_paths)} frames (ffmpeg-python)")
-		return frame_paths, frame_numbers, timestamps
-
-	def is_mostly_black_fast(self, image: Image.Image, black_threshold=20, percentage_threshold=0.9):
-		"""Fast black frame detection"""
-		width, height = image.size
-		if width > 200 or height > 200:
-			scale = min(200/width, 200/height)
-			new_size = (int(width * scale), int(height * scale))
-			image = image.resize(new_size, Image.LANCZOS)
-		
-		grayscale_image = image.convert('L')
-		pixels = np.array(grayscale_image)
-		
-		black_pixel_count = np.sum(pixels < black_threshold)
-		total_pixels = pixels.size
-		
-		black_percentage = black_pixel_count / total_pixels
-		return black_percentage >= percentage_threshold
-
 	@torch.inference_mode()
 	def compute_frame_vision_embeddings(self, frame_paths: List[str]) -> torch.Tensor:
 		"""Compute vision embeddings (SigLIP/CLIP) with ETA and partial saves."""
@@ -272,7 +171,7 @@ class TextFrameAligner:
 		partial_embeddings = []
 		already_processed = set()
 		for i in range(len(frame_paths)):
-			partial_path = os.path.join(partial_dir, f"embedding_{i+1:04d}.pt")
+			partial_path = os.path.join(partial_dir, f"embedding_{i:04d}.pt")
 			if os.path.exists(partial_path):
 				embedding = torch.load(partial_path)
 				partial_embeddings.append(embedding)
@@ -301,7 +200,7 @@ class TextFrameAligner:
 				embedding_cpu = image_features.cpu()
 				all_embeddings.append(embedding_cpu)
 
-				partial_path = os.path.join(partial_dir, f"embedding_{i+1:04d}.pt")
+				partial_path = os.path.join(partial_dir, f"embedding_{i:04d}.pt")
 				torch.save(embedding_cpu, partial_path)
 
 			# Estimate duration
@@ -343,31 +242,34 @@ class TextFrameAligner:
 			text_features = self.vision_model.get_text_features(**inputs)
 		return text_features.cpu()
 
-	def caption_generation(self, frame_paths: List[str]) -> List[str]:
+	def caption_generation(self, extract_scenes_json) -> List[str]:
 		cache_dir = f"{self.cache_path}/caption_generation.json"
 		partial_dir = os.path.join(self.cache_path, "partial_captions")
 		os.makedirs(partial_dir, exist_ok=True)
 
 		# If full cache exists, return it
 		if os.path.exists(cache_dir):
-			logger_config.info(f"✅ Using cached captions for {len(frame_paths)} frames")
+			logger_config.info(f"✅ Using cached captions for {len(extract_scenes_json)} frames")
 			with open(cache_dir, "r") as f:
 				return json.load(f)
 
-		logger_config.info(f"🚀 Starting caption generation for {len(frame_paths)} frames")
+		logger_config.info(f"🚀 Starting caption generation for {len(extract_scenes_json)} frames")
 
 		# Check for partial captions
 		captions = []
 		already_processed = set()
-		for i in range(len(frame_paths)):
-			partial_path = os.path.join(partial_dir, f"caption_{i+1:04d}.json")
+		for i in range(len(extract_scenes_json)):
+			partial_path = os.path.join(partial_dir, f"caption_{i:04d}.json")
 			if os.path.exists(partial_path):
 				with open(partial_path, "r") as f:
 					caption = json.load(f)
-					captions.append(caption)
+					captions.append({
+						"scene_caption":caption.lower(),
+						"scene_dialogue":extract_scenes_json[i]["dialogue"]
+					})
 					already_processed.add(i)
 
-		logger_config.info(f"Resuming from partial cache: {len(already_processed)}/{len(frame_paths)} frames processed")
+		logger_config.info(f"Resuming from partial cache: {len(already_processed)}/{len(extract_scenes_json)} frames processed")
 
 		times = []
 		# prompt = "What are these?"
@@ -375,17 +277,20 @@ class TextFrameAligner:
 		from moondream2 import Moondream2
 		from llava_one_vision import LlavaOneVision
 		with Moondream2() as vision_model:
-			for i in range(len(frame_paths)):
+			for i in range(len(extract_scenes_json)):
 				if i in already_processed:
 					continue  # Skip already cached
 
 				start_time = time.time()
-				with Image.open(frame_paths[i]) as img:
+				with Image.open(extract_scenes_json[i]["frame_path"][0]) as img:
 					result = vision_model.generate(img, prompt)
-					captions.append(result)
+					captions.append({
+						"scene_caption":result.lower(),
+						"scene_dialogue":extract_scenes_json[i]["dialogue"]
+					})
 
 					# Save partial caption
-					partial_path = os.path.join(partial_dir, f"caption_{i+1:04d}.json")
+					partial_path = os.path.join(partial_dir, f"caption_{i:04d}.json")
 					with open(partial_path, "w") as f:
 						json.dump(result, f, indent=4)
 
@@ -393,11 +298,11 @@ class TextFrameAligner:
 				elapsed = time.time() - start_time
 				times.append(elapsed)
 				avg_time = sum(times) / len(times)
-				remaining = avg_time * (len(frame_paths) - i - 1)
+				remaining = avg_time * (len(extract_scenes_json) - i)
 				eta = time.strftime("%H:%M:%S", time.gmtime(remaining))
 
 				logger_config.info(
-					f"Caption Processed {i+1}/{len(frame_paths)} | ETA: {eta}",
+					f"Caption Processed {i+1}/{len(extract_scenes_json)} | ETA: {eta}",
 					overwrite=True
 				)
 
@@ -645,7 +550,7 @@ class TextFrameAligner:
 			json.dump(sentences, f, indent=4)
 		return sentences
 
-	def match_scenes_online(self, captions, sentences, timestamps, frame_paths, frame_numbers):
+	def match_scenes_online(self, captions, sentences, extract_scenes_json):
 		"""Optimized scene extraction"""
 		match_scene = None
 		cache_dir = f"{self.cache_path}/{re.sub(r'[^a-zA-Z]', '', sentences[0][:10])}_match_scenes_online.json"
@@ -660,35 +565,43 @@ class TextFrameAligner:
 			with open("scene_matching_system_prompt.md", 'r') as file:
 				system_prompt = file.read()
 
-			geminiWrapper = GeminiWrapper(system_instruction=system_prompt, model_name="gemini-2.0-flash")
-			model_responses = geminiWrapper.send_message(text, schema=genai.types.Schema(
-				type = genai.types.Type.OBJECT,
-				required = ["data"],
-				properties = {
-					"data": genai.types.Schema(
-						type = genai.types.Type.ARRAY,
-						items = genai.types.Schema(
-							type = genai.types.Type.OBJECT,
-							required = ["scene_caption", "recap_sentence"],
-							properties = {
-								"scene_caption": genai.types.Schema(
-									type = genai.types.Type.STRING,
-								),
-								"recap_sentence": genai.types.Schema(
-									type = genai.types.Type.STRING,
-								),
-							},
-						),
-					),
-				},
-			))
-			match_scene = json.loads(model_responses[0])["data"]
+			# geminiWrapper = GeminiWrapper(system_instruction=system_prompt, model_name="gemini-2.0-flash")
+			# model_responses = geminiWrapper.send_message(text, schema=genai.types.Schema(
+			# 	type = genai.types.Type.OBJECT,
+			# 	required = ["data"],
+			# 	properties = {
+			# 		"data": genai.types.Schema(
+			# 			type = genai.types.Type.ARRAY,
+			# 			items = genai.types.Schema(
+			# 				type = genai.types.Type.OBJECT,
+			# 				required = ["scene_caption", "recap_sentence"],
+			# 				properties = {
+			# 					"scene_caption": genai.types.Schema(
+			# 						type = genai.types.Type.STRING,
+			# 					),
+			# 					"recap_sentence": genai.types.Schema(
+			# 						type = genai.types.Type.STRING,
+			# 					),
+			# 				},
+			# 			),
+			# 		),
+			# 	},
+			# ))
+			# match_scene = json.loads(model_responses[0])["data"]
+			times = 5
+			match_scene = None
+			while times > 0 and match_scene is None:
+				match_scene = run_gemini_generation(system_prompt, text)
+				times -= 1
+			if not match_scene:
+				raise ValueError("failed to get match_scene.")
 			# Cache results
 			with open(cache_dir, "w") as f:
 				json.dump(match_scene, f, indent=4)
 
 		self.load_sentence_transformer()
-		captions_embeddings = self.embedder.encode(captions, convert_to_tensor=True)
+		only_captions = [obj["scene_caption"] for obj in captions]
+		captions_embeddings = self.embedder.encode(only_captions, convert_to_tensor=True)
 
 		resulted_sentence = [sent["recap_sentence"] for sent in match_scene]
 		resulted_sentences_embeddings = self.embedder.encode(resulted_sentence, convert_to_tensor=True)
@@ -716,13 +629,13 @@ class TextFrameAligner:
 
 			result.append({
 				"recap_sentence": curr_sent,
-				"frame_second": timestamps[frame_idx],
-				"frame_path": frame_paths[frame_idx],
+				"frame_second": extract_scenes_json[frame_idx]["scene_start"],
+				"frame_path": extract_scenes_json[frame_idx]["frame_path"][0],
 				"scene_caption": captions[frame_idx],
 			})
 			# Save frame
-			output_path = os.path.join(TEMP_DIR, f"sentence_{i+1:02d}_frame_{frame_numbers[frame_idx]}.jpg")
-			shutil.copy2(frame_paths[frame_idx], output_path)
+			output_path = os.path.join(TEMP_DIR, f"sentence_{i:02d}_frame_{frame_idx}.jpg")
+			shutil.copy2(extract_scenes_json[frame_idx]["frame_path"][0], output_path)
 
 			# Log progress
 			logger_config.info(f"Aligned {i+1}/{len(sentences)} sentences")
@@ -730,7 +643,7 @@ class TextFrameAligner:
 		self.unload_sentence_transformer()
 		return result
 
-	def match_scenes_offline(self, captions, sentences, timestamps, frame_paths, frame_numbers, timestamp_data):
+	def match_scenes_offline(self, captions, sentences, timestamps, frame_paths, timestamp_data):
 		# Step 4: Load models
 		self.load_sentence_transformer()
 
@@ -764,8 +677,7 @@ class TextFrameAligner:
 				"scene_caption": captions[best_idx],
 			})
 			# Save frame
-			frame_second = frame_paths[best_idx].split("frame_second")[1]
-			output_path = os.path.join(TEMP_DIR, f"sentence_{i+1:02d}_frame_{frame_numbers[best_idx]}_frame_second{frame_second}frame_second.jpg")
+			output_path = os.path.join(TEMP_DIR, f"sentence_{i:02d}_frame_{best_idx}.jpg")
 			shutil.copy2(frame_paths[best_idx], output_path)
 
 			# Log progress
@@ -791,13 +703,19 @@ class TextFrameAligner:
 
 		if not frame_paths:
 			# Step 2: Extract scenes
-			frame_paths, frame_numbers, timestamps = self.extract_scenes(video_path, frame_timestamp)
+			extract_scenes_json = extract_scenes_method(video_path, frame_timestamp, self.cache_path, os.path.join(TEMP_DIR, "frames"))
 		else:
-			frame_numbers = [i+1 for i in range(len(frame_paths))]
-			timestamps = [0 for _ in range(len(frame_paths))]
+			extract_scenes_json = []
+			for path in frame_paths:
+				extract_scenes_json.append(
+					{
+						"frame_path": [path],
+						"scene_start": 0
+					}
+				)
 
 		# Step 3: Generate captions
-		captions = self.caption_generation(frame_paths)
+		captions = self.caption_generation(extract_scenes_json)
 
 		# Step 7: Process text
 		sentences = self.split_recap_sentences(recap_text)
@@ -806,7 +724,6 @@ class TextFrameAligner:
 		logger_config.info("🎯 STARTING SENTENCE-FRAME ALIGNMENT")
 		[f.unlink() for f in Path(TEMP_DIR).glob("sentence_*") if f.is_file()]
 
-		captions = [s.lower() for s in captions]
 		sentences = [s.lower() for s in sentences]
 
 		try_times = 2
@@ -814,7 +731,7 @@ class TextFrameAligner:
 
 		while (result is None or len(result) == 0) and try_times > 0:
 			try:
-				result = self.match_scenes_online(captions, sentences, timestamps, frame_paths, frame_numbers)
+				result = self.match_scenes_online(captions, sentences, extract_scenes_json)
 				# result = self.match_scenes_offline(captions, sentences, timestamps, frame_paths, frame_numbers, timestamp_data)
 			except Exception as e:
 				logger_config.error(f'{str(e)} {traceback.format_exc()}')

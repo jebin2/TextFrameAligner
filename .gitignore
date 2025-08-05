@@ -212,3 +212,4 @@ input.json
 subtitle.json
 hf_download
 temp.py
+aistudio_ui_handler.py
