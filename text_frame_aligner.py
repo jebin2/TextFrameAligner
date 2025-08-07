@@ -629,7 +629,7 @@ class TextFrameAligner:
 
 			result.append({
 				"recap_sentence": curr_sent,
-				"frame_second": extract_scenes_json[frame_idx]["scene_start"],
+				"frame_second": extract_scenes_json[frame_idx]["best_time"],
 				"frame_path": extract_scenes_json[frame_idx]["frame_path"][0],
 				"scene_caption": captions[frame_idx],
 			})
@@ -698,19 +698,20 @@ class TextFrameAligner:
 		recap_text = input_json["text"]
 		frame_timestamp = input_json.get("frame_timestamp", [])
 		frame_paths = input_json.get("frame_paths", [])
+		timestamp_data = input_json.get("timestamp_data", [])
 
 		self.set_cache_dir(video_path)
 
 		if not frame_paths:
 			# Step 2: Extract scenes
-			extract_scenes_json = extract_scenes_method(video_path, frame_timestamp, self.cache_path, os.path.join(TEMP_DIR, "frames"))
+			extract_scenes_json = extract_scenes_method(video_path, frame_timestamp, timestamp_data, self.cache_path, os.path.join(TEMP_DIR, "frames"))
 		else:
 			extract_scenes_json = []
 			for path in frame_paths:
 				extract_scenes_json.append(
 					{
 						"frame_path": [path],
-						"scene_start": 0
+						"best_time": 0
 					}
 				)
 
