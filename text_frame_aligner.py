@@ -702,7 +702,7 @@ class TextFrameAligner:
 
 		self.set_cache_dir(video_path)
 
-		if not frame_paths:
+		if not frame_paths and not video_path.endswith((".jpg", ".png", ".jpeg")):
 			# Step 2: Extract scenes
 			extract_scenes_json = extract_scenes_method(video_path, frame_timestamp, timestamp_data, self.cache_path, os.path.join(TEMP_DIR, "frames"))
 		else:
@@ -711,7 +711,8 @@ class TextFrameAligner:
 				extract_scenes_json.append(
 					{
 						"frame_path": [path],
-						"best_time": 0
+						"best_time": 0,
+						"dialogue": ""
 					}
 				)
 
