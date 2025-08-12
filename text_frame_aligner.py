@@ -16,7 +16,6 @@ import json
 import multiprocessing as mp
 from functools import lru_cache
 import gc
-from gemiwrap import GeminiWrapper
 from google import genai
 import hashlib
 import re
@@ -554,94 +553,98 @@ class TextFrameAligner:
 		"""Optimized scene extraction"""
 		match_scene = None
 		cache_dir = f"{self.cache_path}/{re.sub(r'[^a-zA-Z]', '', sentences[0][:10])}_match_scenes_online.json"
-		if os.path.exists(cache_dir):
-			logger_config.info(f"Using cached match_scenes_online")
-			with open(cache_dir, "r") as f:
-				match_scene = json.load(f)
+		try:
+			if os.path.exists(cache_dir):
+				logger_config.info(f"Using cached match_scenes_online")
+				with open(cache_dir, "r") as f:
+					match_scene = json.load(f)
 
-		if not match_scene:
-			text = f"""Scene Captions:: {captions}
-	Recap Sentences:: {sentences}"""
-			with open("scene_matching_system_prompt.md", 'r') as file:
-				system_prompt = file.read()
-
-			# geminiWrapper = GeminiWrapper(system_instruction=system_prompt, model_name="gemini-2.0-flash")
-			# model_responses = geminiWrapper.send_message(text, schema=genai.types.Schema(
-			# 	type = genai.types.Type.OBJECT,
-			# 	required = ["data"],
-			# 	properties = {
-			# 		"data": genai.types.Schema(
-			# 			type = genai.types.Type.ARRAY,
-			# 			items = genai.types.Schema(
-			# 				type = genai.types.Type.OBJECT,
-			# 				required = ["scene_caption", "recap_sentence"],
-			# 				properties = {
-			# 					"scene_caption": genai.types.Schema(
-			# 						type = genai.types.Type.STRING,
-			# 					),
-			# 					"recap_sentence": genai.types.Schema(
-			# 						type = genai.types.Type.STRING,
-			# 					),
-			# 				},
-			# 			),
-			# 		),
-			# 	},
-			# ))
-			# match_scene = json.loads(model_responses[0])["data"]
-			times = 5
-			match_scene = None
-			while times > 0 and match_scene is None:
-				match_scene = run_gemini_generation(system_prompt, text)
-				times -= 1
 			if not match_scene:
-				raise ValueError("failed to get match_scene.")
-			# Cache results
-			with open(cache_dir, "w") as f:
-				json.dump(match_scene, f, indent=4)
+				text = f"""Scene Captions:: {captions}
+		Recap Sentences:: {sentences}"""
+				with open("scene_matching_system_prompt.md", 'r') as file:
+					system_prompt = file.read()
 
-		self.load_sentence_transformer()
-		only_captions = [obj["scene_caption"] for obj in captions]
-		captions_embeddings = self.embedder.encode(only_captions, convert_to_tensor=True)
+				# geminiWrapper = GeminiWrapper(system_instruction=system_prompt, model_name="gemini-2.0-flash")
+				# model_responses = geminiWrapper.send_message(text, schema=genai.types.Schema(
+				# 	type = genai.types.Type.OBJECT,
+				# 	required = ["data"],
+				# 	properties = {
+				# 		"data": genai.types.Schema(
+				# 			type = genai.types.Type.ARRAY,
+				# 			items = genai.types.Schema(
+				# 				type = genai.types.Type.OBJECT,
+				# 				required = ["scene_caption", "recap_sentence"],
+				# 				properties = {
+				# 					"scene_caption": genai.types.Schema(
+				# 						type = genai.types.Type.STRING,
+				# 					),
+				# 					"recap_sentence": genai.types.Schema(
+				# 						type = genai.types.Type.STRING,
+				# 					),
+				# 				},
+				# 			),
+				# 		),
+				# 	},
+				# ))
+				# match_scene = json.loads(model_responses[0])["data"]
+				times = 5
+				match_scene = None
+				while times > 0 and match_scene is None:
+					match_scene, _ = run_gemini_generation(system_prompt, text)
+					times -= 1
+				if not match_scene:
+					raise ValueError("failed to get match_scene.")
+				# Cache results
+				with open(cache_dir, "w") as f:
+					json.dump(match_scene, f, indent=4)
 
-		resulted_sentence = [sent["recap_sentence"] for sent in match_scene]
-		resulted_sentences_embeddings = self.embedder.encode(resulted_sentence, convert_to_tensor=True)
+			self.load_sentence_transformer()
+			only_captions = [obj["scene_caption"] for obj in captions]
+			captions_embeddings = self.embedder.encode(only_captions, convert_to_tensor=True)
 
-		result = []
-		max_sentences_len = max([len(sent) for sent in sentences]) + 20
-		for i, curr_sent in enumerate(sentences):
-			query_embedding = self.embedder.encode(curr_sent, convert_to_tensor=True)
-			similarities = util.cos_sim(query_embedding, resulted_sentences_embeddings)
-			resulted_idx = similarities.argmax()
+			resulted_sentence = [sent["recap_sentence"] for sent in match_scene]
+			resulted_sentences_embeddings = self.embedder.encode(resulted_sentence, convert_to_tensor=True)
 
-			scene_caption = match_scene[resulted_idx]["scene_caption"]
-			recap_sentence =  match_scene[resulted_idx]["recap_sentence"]
-			if len(scene_caption) < len(recap_sentence):
-				scene_caption =  match_scene[resulted_idx]["recap_sentence"]
-				recap_sentence =  match_scene[resulted_idx]["scene_caption"]
+			result = []
+			max_sentences_len = max([len(sent) for sent in sentences]) + 20
+			for i, curr_sent in enumerate(sentences):
+				query_embedding = self.embedder.encode(curr_sent, convert_to_tensor=True)
+				similarities = util.cos_sim(query_embedding, resulted_sentences_embeddings)
+				resulted_idx = similarities.argmax()
 
-			if len(recap_sentence) > max_sentences_len:
-				os.remove(cache_dir)
-				raise ValueError(f"Invalid sentence:: {recap_sentence}")
+				scene_caption = match_scene[resulted_idx]["scene_caption"]
+				recap_sentence =  match_scene[resulted_idx]["recap_sentence"]
+				if len(scene_caption) < len(recap_sentence):
+					scene_caption =  match_scene[resulted_idx]["recap_sentence"]
+					recap_sentence =  match_scene[resulted_idx]["scene_caption"]
 
-			query_embedding = self.embedder.encode(scene_caption, convert_to_tensor=True)
-			similarities = util.cos_sim(query_embedding, captions_embeddings)
-			frame_idx = similarities.argmax()
+				if len(recap_sentence) > max_sentences_len:
+					os.remove(cache_dir)
+					raise ValueError(f"Invalid sentence:: {recap_sentence}")
 
-			result.append({
-				"recap_sentence": curr_sent,
-				"frame_second": extract_scenes_json[frame_idx]["best_time"],
-				"frame_path": extract_scenes_json[frame_idx]["frame_path"][0],
-				"scene_caption": captions[frame_idx],
-			})
-			# Save frame
-			output_path = os.path.join(TEMP_DIR, f"sentence_{i:02d}_frame_{frame_idx}.jpg")
-			shutil.copy2(extract_scenes_json[frame_idx]["frame_path"][0], output_path)
+				query_embedding = self.embedder.encode(scene_caption, convert_to_tensor=True)
+				similarities = util.cos_sim(query_embedding, captions_embeddings)
+				frame_idx = similarities.argmax()
 
-			# Log progress
-			logger_config.info(f"Aligned {i+1}/{len(sentences)} sentences")
+				result.append({
+					"recap_sentence": curr_sent,
+					"frame_second": extract_scenes_json[frame_idx]["best_time"],
+					"frame_path": extract_scenes_json[frame_idx]["frame_path"][0],
+					"scene_caption": captions[frame_idx],
+				})
+				# Save frame
+				output_path = os.path.join(TEMP_DIR, f"sentence_{i:02d}_frame_{frame_idx}.jpg")
+				shutil.copy2(extract_scenes_json[frame_idx]["frame_path"][0], output_path)
 
-		self.unload_sentence_transformer()
-		return result
+				# Log progress
+				logger_config.info(f"Aligned {i+1}/{len(sentences)} sentences")
+
+			self.unload_sentence_transformer()
+			return result
+		except Exception as e:
+			os.remove(cache_dir)
+			raise(e)
 
 	def match_scenes_offline(self, captions, sentences, timestamps, frame_paths, timestamp_data):
 		# Step 4: Load models
