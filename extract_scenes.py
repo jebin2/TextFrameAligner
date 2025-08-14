@@ -173,27 +173,29 @@ def fast_sharpness_assessment(image):
 		return gradient_magnitude.mean()
 
 
-def is_mostly_black(frame: np.ndarray, black_threshold=20, percentage_threshold=0.9):
-	"""Fast black frame detection for OpenCV NumPy frames."""
-	if frame is None or frame.size == 0:
-		return True  # Treat empty frames as black
+def is_mostly_black(frame, black_threshold=20, percentage_threshold=0.9, sample_rate=10):
+    """
+    Fast black frame detection using pixel sampling.
 
-	# Resize if large for faster check
-	height, width = frame.shape[:2]
-	if width > 200 or height > 200:
-		scale = min(200 / width, 200 / height)
-		new_size = (int(width * scale), int(height * scale))
-		frame = cv2.resize(frame, new_size, interpolation=cv2.INTER_AREA)
-
-	# Convert to grayscale
-	gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
-
-	# Count black pixels
-	black_pixel_count = np.sum(gray < black_threshold)
-	total_pixels = gray.size
-
-	black_percentage = black_pixel_count / total_pixels
-	return black_percentage >= percentage_threshold
+    Args:
+        frame: OpenCV BGR frame (NumPy array)
+        black_threshold: grayscale value below which a pixel is considered black
+        percentage_threshold: fraction of black pixels to consider frame mostly black
+        sample_rate: sample every N-th pixel in both dimensions (higher = faster)
+    Returns:
+        True if mostly black, False otherwise
+    """
+    import cv2
+    import numpy as np
+    if frame is None or frame.size == 0:
+        return True
+    # Convert to grayscale
+    gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+    # Sample pixels
+    sampled = gray[::sample_rate, ::sample_rate]
+    black_count = np.sum(sampled < black_threshold)
+    total_count = sampled.size
+    return (black_count / total_count) >= percentage_threshold
 
 
 def get_frame_hash(frame):
