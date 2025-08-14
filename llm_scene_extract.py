@@ -4,7 +4,7 @@ import cv2
 from tqdm import tqdm
 from custom_logger import logger_config
 
-def run_transnetv2(video_path: str, frame_timestamps=None) -> list:
+def run_transnetv2(video_path: str, frame_timestamps=None, start_from_sec=-1, end_from_sec=-1) -> list:
 	transnetv2_dir = "/home/jebineinstein/git/TransNetV2"
 	video_path = os.path.abspath(video_path)
 	scene_txt_path = f"{video_path}.scenes.txt"
@@ -35,6 +35,8 @@ def run_transnetv2(video_path: str, frame_timestamps=None) -> list:
 
 	scene_seconds = []
 	for start, end in tqdm(scene_frames, desc="Converting frames to seconds"):
+		if start_sec < start_from_sec or (end_from_sec != -1 and end > end_from_sec):
+			continue
 		start_sec = start / fps
 		end_sec = end / fps
 		scene_seconds.append((start_sec, end_sec))
