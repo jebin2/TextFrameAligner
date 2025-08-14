@@ -593,6 +593,7 @@ class TextFrameAligner:
 				while times > 0 and match_scene is None:
 					match_scene, _ = run_gemini_generation(system_prompt, text)
 					times -= 1
+					logger_config.info("wait before next try", seconds=10)
 				if not match_scene:
 					raise ValueError("failed to get match_scene.")
 				# Cache results

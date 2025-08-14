@@ -4,7 +4,7 @@ import cv2
 from tqdm import tqdm
 from custom_logger import logger_config
 
-def run_transnetv2(video_path: str, frame_timestamps) -> list:
+def run_transnetv2(video_path: str, frame_timestamps=None) -> list:
 	transnetv2_dir = "/home/jebineinstein/git/TransNetV2"
 	video_path = os.path.abspath(video_path)
 	scene_txt_path = f"{video_path}.scenes.txt"

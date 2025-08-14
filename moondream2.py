@@ -27,10 +27,10 @@ class Moondream2(VisionModel):
 
 if __name__ == "__main__":
 	model = Moondream2()
-	image = Image.open("../CaptionCreator/media/comic_review/Bloodletter #1 (2025)/Bloodletter 001-0007.jpg")
-	text = "How many panels are in this comic page"
+	image = Image.open("temp_dir/frames/scene_0036_at_155.45s.jpg")
+	text = "Describe what is happening in this video frame as if you're telling a story. Focus on the main subjects, their actions, the setting, and any important details that would help someone understand the scene's context."
 	start_time = time.time()
-	response = model.query(image, text)
+	response = model.generate(image, text)
 	end_time = time.time()
 	print("Moondream2:", response)
 	print(f"⏱ Total time taken: {end_time - start_time:.2f} seconds")
