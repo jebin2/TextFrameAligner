@@ -17,234 +17,234 @@ SIMILARITY_MODELS = None
 
 
 def variance_of_laplacian(image):
-    """Original method - Blur detection using Laplacian variance."""
-    return cv2.Laplacian(image, cv2.CV_64F).var()
+	"""Original method - Blur detection using Laplacian variance."""
+	return cv2.Laplacian(image, cv2.CV_64F).var()
 
 
 def sobel_variance(image):
-    """Sobel edge detection variance - often more robust than Laplacian."""
-    sobelx = cv2.Sobel(image, cv2.CV_64F, 1, 0, ksize=3)
-    sobely = cv2.Sobel(image, cv2.CV_64F, 0, 1, ksize=3)
-    sobel_magnitude = np.sqrt(sobelx**2 + sobely**2)
-    return sobel_magnitude.var()
+	"""Sobel edge detection variance - often more robust than Laplacian."""
+	sobelx = cv2.Sobel(image, cv2.CV_64F, 1, 0, ksize=3)
+	sobely = cv2.Sobel(image, cv2.CV_64F, 0, 1, ksize=3)
+	sobel_magnitude = np.sqrt(sobelx**2 + sobely**2)
+	return sobel_magnitude.var()
 
 
 def tenengrad_sharpness(image):
-    """Tenengrad sharpness metric - very effective for natural images."""
-    sobelx = cv2.Sobel(image, cv2.CV_64F, 1, 0, ksize=3)
-    sobely = cv2.Sobel(image, cv2.CV_64F, 0, 1, ksize=3)
-    gradient_magnitude = np.sqrt(sobelx**2 + sobely**2)
-    # Threshold to focus on significant edges
-    threshold = gradient_magnitude.mean() + gradient_magnitude.std()
-    return np.sum(gradient_magnitude[gradient_magnitude > threshold])
+	"""Tenengrad sharpness metric - very effective for natural images."""
+	sobelx = cv2.Sobel(image, cv2.CV_64F, 1, 0, ksize=3)
+	sobely = cv2.Sobel(image, cv2.CV_64F, 0, 1, ksize=3)
+	gradient_magnitude = np.sqrt(sobelx**2 + sobely**2)
+	# Threshold to focus on significant edges
+	threshold = gradient_magnitude.mean() + gradient_magnitude.std()
+	return np.sum(gradient_magnitude[gradient_magnitude > threshold])
 
 
 def brenner_sharpness(image):
-    """Brenner focus measure - good for high-frequency content."""
-    # Horizontal gradient
-    diff_h = np.abs(image[:, 2:] - image[:, :-2])
-    # Vertical gradient  
-    diff_v = np.abs(image[2:, :] - image[:-2, :])
-    return np.sum(diff_h**2) + np.sum(diff_v**2)
+	"""Brenner focus measure - good for high-frequency content."""
+	# Horizontal gradient
+	diff_h = np.abs(image[:, 2:] - image[:, :-2])
+	# Vertical gradient  
+	diff_v = np.abs(image[2:, :] - image[:-2, :])
+	return np.sum(diff_h**2) + np.sum(diff_v**2)
 
 
 def modified_laplacian_sharpness(image):
-    """Modified Laplacian - more robust than standard Laplacian."""
-    # Use a larger kernel for better edge detection
-    kernel = np.array([[-1, -1, -1],
-                       [-1,  8, -1], 
-                       [-1, -1, -1]], dtype=np.float32)
-    
-    laplacian = cv2.filter2D(image.astype(np.float32), cv2.CV_32F, kernel)
-    return laplacian.var()
+	"""Modified Laplacian - more robust than standard Laplacian."""
+	# Use a larger kernel for better edge detection
+	kernel = np.array([[-1, -1, -1],
+					   [-1,  8, -1], 
+					   [-1, -1, -1]], dtype=np.float32)
+	
+	laplacian = cv2.filter2D(image.astype(np.float32), cv2.CV_32F, kernel)
+	return laplacian.var()
 
 
 def edge_density_sharpness(image):
-    """Edge density based sharpness - good for complex scenes."""
-    # Canny edge detection
-    edges = cv2.Canny(image, 50, 150)
-    edge_density = np.sum(edges) / edges.size
-    
-    # Combine with edge strength
-    sobelx = cv2.Sobel(image, cv2.CV_64F, 1, 0, ksize=3)
-    sobely = cv2.Sobel(image, cv2.CV_64F, 0, 1, ksize=3)
-    edge_strength = np.mean(np.sqrt(sobelx**2 + sobely**2))
-    
-    return edge_density * edge_strength
+	"""Edge density based sharpness - good for complex scenes."""
+	# Canny edge detection
+	edges = cv2.Canny(image, 50, 150)
+	edge_density = np.sum(edges) / edges.size
+	
+	# Combine with edge strength
+	sobelx = cv2.Sobel(image, cv2.CV_64F, 1, 0, ksize=3)
+	sobely = cv2.Sobel(image, cv2.CV_64F, 0, 1, ksize=3)
+	edge_strength = np.mean(np.sqrt(sobelx**2 + sobely**2))
+	
+	return edge_density * edge_strength
 
 
 def gradient_magnitude_variance(image):
-    """Gradient magnitude variance - balanced approach."""
-    # Scharr operator (more accurate than Sobel)
-    scharrx = cv2.Scharr(image, cv2.CV_64F, 1, 0)
-    scharry = cv2.Scharr(image, cv2.CV_64F, 0, 1)
-    gradient_magnitude = np.sqrt(scharrx**2 + scharry**2)
-    return gradient_magnitude.var()
+	"""Gradient magnitude variance - balanced approach."""
+	# Scharr operator (more accurate than Sobel)
+	scharrx = cv2.Scharr(image, cv2.CV_64F, 1, 0)
+	scharry = cv2.Scharr(image, cv2.CV_64F, 0, 1)
+	gradient_magnitude = np.sqrt(scharrx**2 + scharry**2)
+	return gradient_magnitude.var()
 
 
 def local_contrast_sharpness(image):
-    """Local contrast based sharpness - good for overall image quality."""
-    # Calculate local standard deviation using a sliding window
-    kernel = np.ones((9, 9), np.float32) / 81
-    local_mean = cv2.filter2D(image.astype(np.float32), -1, kernel)
-    local_sqr_mean = cv2.filter2D((image.astype(np.float32))**2, -1, kernel)
-    local_variance = local_sqr_mean - local_mean**2
-    local_std = np.sqrt(np.maximum(local_variance, 0))
-    return np.mean(local_std)
+	"""Local contrast based sharpness - good for overall image quality."""
+	# Calculate local standard deviation using a sliding window
+	kernel = np.ones((9, 9), np.float32) / 81
+	local_mean = cv2.filter2D(image.astype(np.float32), -1, kernel)
+	local_sqr_mean = cv2.filter2D((image.astype(np.float32))**2, -1, kernel)
+	local_variance = local_sqr_mean - local_mean**2
+	local_std = np.sqrt(np.maximum(local_variance, 0))
+	return np.mean(local_std)
 
 
 def wavelet_sharpness(image):
-    """Wavelet-based sharpness (requires scikit-image)."""
-    try:
-        from skimage import restoration
-        # Simple wavelet-based approach using high-frequency content
-        # Apply Gaussian blur and subtract from original
-        blurred = cv2.GaussianBlur(image.astype(np.float32), (5, 5), 1.0)
-        high_freq = np.abs(image.astype(np.float32) - blurred)
-        return np.mean(high_freq)
-    except ImportError:
-        # Fallback to high-pass filter
-        kernel = np.array([[-1, -1, -1],
-                          [-1,  9, -1],
-                          [-1, -1, -1]], dtype=np.float32)
-        high_pass = cv2.filter2D(image.astype(np.float32), cv2.CV_32F, kernel)
-        return np.mean(np.abs(high_pass))
+	"""Wavelet-based sharpness (requires scikit-image)."""
+	try:
+		from skimage import restoration
+		# Simple wavelet-based approach using high-frequency content
+		# Apply Gaussian blur and subtract from original
+		blurred = cv2.GaussianBlur(image.astype(np.float32), (5, 5), 1.0)
+		high_freq = np.abs(image.astype(np.float32) - blurred)
+		return np.mean(high_freq)
+	except ImportError:
+		# Fallback to high-pass filter
+		kernel = np.array([[-1, -1, -1],
+						  [-1,  9, -1],
+						  [-1, -1, -1]], dtype=np.float32)
+		high_pass = cv2.filter2D(image.astype(np.float32), cv2.CV_32F, kernel)
+		return np.mean(np.abs(high_pass))
 
 
 def composite_sharpness_score(image):
-    """
-    Composite score combining multiple metrics for robust assessment.
-    This is often the best approach for diverse content.
-    """
-    # Normalize image to 0-255 range
-    if image.dtype != np.uint8:
-        image = cv2.normalize(image, None, 0, 255, cv2.NORM_MINMAX).astype(np.uint8)
-    
-    # Calculate multiple metrics
-    laplacian_var = variance_of_laplacian(image)
-    sobel_var = sobel_variance(image)
-    tenengrad = tenengrad_sharpness(image)
-    edge_density = edge_density_sharpness(image)
-    local_contrast = local_contrast_sharpness(image)
-    
-    # Normalize each metric to 0-1 range (approximate)
-    # These normalization factors might need adjustment based on your content
-    laplacian_norm = min(laplacian_var / 1000, 1.0)
-    sobel_norm = min(sobel_var / 5000, 1.0)
-    tenengrad_norm = min(tenengrad / 1000000, 1.0)
-    edge_norm = min(edge_density / 100, 1.0)
-    contrast_norm = min(local_contrast / 50, 1.0)
-    
-    # Weighted combination (adjust weights based on your needs)
-    weights = [0.2, 0.25, 0.25, 0.15, 0.15]
-    composite_score = (weights[0] * laplacian_norm + 
-                      weights[1] * sobel_norm +
-                      weights[2] * tenengrad_norm +
-                      weights[3] * edge_norm +
-                      weights[4] * contrast_norm)
-    
-    return composite_score
+	"""
+	Composite score combining multiple metrics for robust assessment.
+	This is often the best approach for diverse content.
+	"""
+	# Normalize image to 0-255 range
+	if image.dtype != np.uint8:
+		image = cv2.normalize(image, None, 0, 255, cv2.NORM_MINMAX).astype(np.uint8)
+	
+	# Calculate multiple metrics
+	laplacian_var = variance_of_laplacian(image)
+	sobel_var = sobel_variance(image)
+	tenengrad = tenengrad_sharpness(image)
+	edge_density = edge_density_sharpness(image)
+	local_contrast = local_contrast_sharpness(image)
+	
+	# Normalize each metric to 0-1 range (approximate)
+	# These normalization factors might need adjustment based on your content
+	laplacian_norm = min(laplacian_var / 1000, 1.0)
+	sobel_norm = min(sobel_var / 5000, 1.0)
+	tenengrad_norm = min(tenengrad / 1000000, 1.0)
+	edge_norm = min(edge_density / 100, 1.0)
+	contrast_norm = min(local_contrast / 50, 1.0)
+	
+	# Weighted combination (adjust weights based on your needs)
+	weights = [0.2, 0.25, 0.25, 0.15, 0.15]
+	composite_score = (weights[0] * laplacian_norm + 
+					  weights[1] * sobel_norm +
+					  weights[2] * tenengrad_norm +
+					  weights[3] * edge_norm +
+					  weights[4] * contrast_norm)
+	
+	return composite_score
 
 
 def fast_sharpness_assessment(image):
-    """
-    Fast sharpness assessment for real-time processing.
-    Good balance between speed and accuracy.
-    """
-    # Resize for faster processing if image is large
-    h, w = image.shape[:2]
-    if w > 640 or h > 480:
-        scale = min(640/w, 480/h)
-        new_w, new_h = int(w * scale), int(h * scale)
-        image = cv2.resize(image, (new_w, new_h))
-    
-    # Use Scharr operator for better accuracy than Sobel
-    scharrx = cv2.Scharr(image, cv2.CV_64F, 1, 0)
-    scharry = cv2.Scharr(image, cv2.CV_64F, 0, 1)
-    gradient_magnitude = np.sqrt(scharrx**2 + scharry**2)
-    
-    # Focus on high-gradient regions
-    threshold = np.percentile(gradient_magnitude, 75)
-    high_gradient_mask = gradient_magnitude > threshold
-    
-    if np.sum(high_gradient_mask) > 0:
-        return np.mean(gradient_magnitude[high_gradient_mask])
-    else:
-        return gradient_magnitude.mean()
+	"""
+	Fast sharpness assessment for real-time processing.
+	Good balance between speed and accuracy.
+	"""
+	# Resize for faster processing if image is large
+	h, w = image.shape[:2]
+	if w > 640 or h > 480:
+		scale = min(640/w, 480/h)
+		new_w, new_h = int(w * scale), int(h * scale)
+		image = cv2.resize(image, (new_w, new_h))
+	
+	# Use Scharr operator for better accuracy than Sobel
+	scharrx = cv2.Scharr(image, cv2.CV_64F, 1, 0)
+	scharry = cv2.Scharr(image, cv2.CV_64F, 0, 1)
+	gradient_magnitude = np.sqrt(scharrx**2 + scharry**2)
+	
+	# Focus on high-gradient regions
+	threshold = np.percentile(gradient_magnitude, 75)
+	high_gradient_mask = gradient_magnitude > threshold
+	
+	if np.sum(high_gradient_mask) > 0:
+		return np.mean(gradient_magnitude[high_gradient_mask])
+	else:
+		return gradient_magnitude.mean()
 
 
 def is_mostly_black(frame: np.ndarray, black_threshold=20, percentage_threshold=0.9):
-    """Fast black frame detection for OpenCV NumPy frames."""
-    if frame is None or frame.size == 0:
-        return True  # Treat empty frames as black
+	"""Fast black frame detection for OpenCV NumPy frames."""
+	if frame is None or frame.size == 0:
+		return True  # Treat empty frames as black
 
-    # Resize if large for faster check
-    height, width = frame.shape[:2]
-    if width > 200 or height > 200:
-        scale = min(200 / width, 200 / height)
-        new_size = (int(width * scale), int(height * scale))
-        frame = cv2.resize(frame, new_size, interpolation=cv2.INTER_AREA)
+	# Resize if large for faster check
+	height, width = frame.shape[:2]
+	if width > 200 or height > 200:
+		scale = min(200 / width, 200 / height)
+		new_size = (int(width * scale), int(height * scale))
+		frame = cv2.resize(frame, new_size, interpolation=cv2.INTER_AREA)
 
-    # Convert to grayscale
-    gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+	# Convert to grayscale
+	gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
 
-    # Count black pixels
-    black_pixel_count = np.sum(gray < black_threshold)
-    total_pixels = gray.size
+	# Count black pixels
+	black_pixel_count = np.sum(gray < black_threshold)
+	total_pixels = gray.size
 
-    black_percentage = black_pixel_count / total_pixels
-    return black_percentage >= percentage_threshold
+	black_percentage = black_pixel_count / total_pixels
+	return black_percentage >= percentage_threshold
 
 
 def get_frame_hash(frame):
-    """Quick hash for frame identification."""
-    # Simple hash based on mean and variance of frame
-    gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
-    resized = cv2.resize(gray, (32, 32))  # Very small for fast hashing
-    return hash((resized.mean(), resized.var()))
+	"""Quick hash for frame identification."""
+	# Simple hash based on mean and variance of frame
+	gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+	resized = cv2.resize(gray, (32, 32))  # Very small for fast hashing
+	return hash((resized.mean(), resized.var()))
 
 
 def load_embedding_cache(cache_path: str) -> Dict:
-    """Load embedding cache from disk."""
-    cache_file = os.path.join(cache_path, "embedding_cache.pkl")
-    if os.path.exists(cache_file):
-        try:
-            with open(cache_file, 'rb') as f:
-                return pickle.load(f)
-        except Exception as e:
-            logger_config.warning(f"Failed to load embedding cache: {e}")
-    return {}
+	"""Load embedding cache from disk."""
+	cache_file = os.path.join(cache_path, "embedding_cache.pkl")
+	if os.path.exists(cache_file):
+		try:
+			with open(cache_file, 'rb') as f:
+				return pickle.load(f)
+		except Exception as e:
+			logger_config.warning(f"Failed to load embedding cache: {e}")
+	return {}
 
 
 def save_embedding_cache(cache: Dict, cache_path: str):
-    """Save embedding cache to disk."""
-    os.makedirs(cache_path, exist_ok=True)
-    cache_file = os.path.join(cache_path, "embedding_cache.pkl")
-    try:
-        with open(cache_file, 'wb') as f:
-            pickle.dump(cache, f)
-    except Exception as e:
-        logger_config.warning(f"Failed to save embedding cache: {e}")
+	"""Save embedding cache to disk."""
+	os.makedirs(cache_path, exist_ok=True)
+	cache_file = os.path.join(cache_path, "embedding_cache.pkl")
+	try:
+		with open(cache_file, 'wb') as f:
+			pickle.dump(cache, f)
+	except Exception as e:
+		logger_config.warning(f"Failed to save embedding cache: {e}")
 
 
 def get_image_embedding_cached(frame, model, processor, device, cache_path: str):
-    """Extract embedding with caching."""
-    global EMBEDDING_CACHE
-    
-    # Create a hash for this frame
-    frame_hash = get_frame_hash(frame)
-    
-    # Check cache first
-    if frame_hash in EMBEDDING_CACHE:
-        return EMBEDDING_CACHE[frame_hash]
-    
-    # Compute embedding
-    embedding = get_image_embedding(frame, model, processor, device)
-    
-    # Cache it
-    EMBEDDING_CACHE[frame_hash] = embedding
-    
-    return embedding
+	"""Extract embedding with caching."""
+	global EMBEDDING_CACHE
+	
+	# Create a hash for this frame
+	frame_hash = get_frame_hash(frame)
+	
+	# Check cache first
+	if frame_hash in EMBEDDING_CACHE:
+		return EMBEDDING_CACHE[frame_hash]
+	
+	# Compute embedding
+	embedding = get_image_embedding(frame, model, processor, device)
+	
+	# Cache it
+	EMBEDDING_CACHE[frame_hash] = embedding
+	
+	return embedding
 
 
 def get_image_embedding(frame, model, processor, device):
@@ -260,7 +260,7 @@ def get_image_embedding(frame, model, processor, device):
 	inputs = processor(images=pil_image, return_tensors="pt").to(device)
 	
 	# Extract embedding
-	with torch.no_grad():
+	with torch.inference_mode():
 		outputs = model(**inputs)
 		# Use the [CLS] token embedding (first token of last hidden state)
 		embedding = outputs.last_hidden_state[:, 0].cpu().numpy().flatten()
@@ -313,200 +313,161 @@ def initialize_embedding_model():
 
 
 class FrameSimilarityCache:
-    """Manages frame similarity checking with pre-computed embeddings."""
-    
-    def __init__(self, frames_dir: str, cache_path: str, model=None, processor=None, device=None):
-        self.frames_dir = frames_dir
-        self.cache_path = cache_path
-        self.model = model
-        self.processor = processor
-        self.device = device
-        self.existing_embeddings = {}
-        self.existing_hashes = {}
-        self._load_existing_frames()
-    
-    def _load_existing_frames(self):
-        """Pre-compute embeddings/hashes for all existing frames."""
-        if not os.path.exists(self.frames_dir):
-            return
-        
-        print("[INFO] Pre-computing embeddings for existing frames...")
-        existing_files = [f for f in os.listdir(self.frames_dir) 
-                         if f.endswith('.jpg') and not f.startswith('_tmp_')]
-        
-        for filename in tqdm(existing_files, desc="Loading existing frames"):
-            frame_path = os.path.join(self.frames_dir, filename)
-            frame = cv2.imread(frame_path)
-            if frame is not None:
-                if self.model is not None:
-                    # Use embedding-based similarity
-                    embedding = get_image_embedding_cached(frame, self.model, self.processor, self.device, self.cache_path)
-                    self.existing_embeddings[filename] = embedding
-                else:
-                    # Use hash-based similarity
-                    try:
-                        import imagehash
-                        from PIL import Image
-                        rgb_frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-                        pil_image = Image.fromarray(rgb_frame)
-                        frame_hash = imagehash.dhash(pil_image)
-                        self.existing_hashes[filename] = frame_hash
-                    except ImportError:
-                        pass
-    
-    def is_similar_to_existing(self, frame, threshold=0.85, hash_threshold=5):
-        """Check if frame is similar to any existing frames using cached data."""
-        if self.model is not None:
-            # Embedding-based comparison
-            current_embedding = get_image_embedding_cached(frame, self.model, self.processor, self.device, self.cache_path)
-            
-            for filename, existing_embedding in self.existing_embeddings.items():
-                similarity = cosine_similarity_numpy(current_embedding, existing_embedding)
-                if similarity > threshold:
-                    return True
-        else:
-            # Hash-based comparison
-            try:
-                import imagehash
-                from PIL import Image
-                rgb_frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-                pil_image = Image.fromarray(rgb_frame)
-                current_hash = imagehash.dhash(pil_image)
-                
-                for filename, existing_hash in self.existing_hashes.items():
-                    hash_distance = current_hash - existing_hash
-                    if hash_distance <= hash_threshold:
-                        return True
-            except ImportError:
-                pass
-        
-        return False
-    
-    def add_frame(self, frame, filename):
-        """Add a new frame to the cache."""
-        if self.model is not None:
-            embedding = get_image_embedding_cached(frame, self.model, self.processor, self.device, self.cache_path)
-            self.existing_embeddings[filename] = embedding
-        else:
-            try:
-                import imagehash
-                from PIL import Image
-                rgb_frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-                pil_image = Image.fromarray(rgb_frame)
-                frame_hash = imagehash.dhash(pil_image)
-                self.existing_hashes[filename] = frame_hash
-            except ImportError:
-                pass
+	"""Manages frame similarity checking with pre-computed embeddings."""
+	
+	def __init__(self, frames_dir: str, cache_path: str, model=None, processor=None, device=None):
+		self.frames_dir = frames_dir
+		self.cache_path = cache_path
+		self.model = model
+		self.processor = processor
+		self.device = device
+		self.existing_embeddings = {}
+		self.existing_hashes = {}
+		self._load_existing_frames()
+	
+	def _load_existing_frames(self):
+		"""Pre-compute embeddings/hashes for all existing frames."""
+		if not os.path.exists(self.frames_dir):
+			return
+		
+		print("[INFO] Pre-computing embeddings for existing frames...")
+		existing_files = [f for f in os.listdir(self.frames_dir) 
+						 if f.endswith('.jpg') and not f.startswith('_tmp_')]
+		
+		for filename in tqdm(existing_files, desc="Loading existing frames"):
+			frame_path = os.path.join(self.frames_dir, filename)
+			frame = cv2.imread(frame_path)
+			if frame is not None:
+				# Use embedding-based similarity
+				embedding = get_image_embedding_cached(frame, self.model, self.processor, self.device, self.cache_path)
+				self.existing_embeddings[filename] = embedding
+	
+	def is_similar_to_existing(self, frame, threshold=0.85, hash_threshold=5):
+		"""Check if frame is similar to any existing frames using cached data."""
+		# Embedding-based comparison
+		current_embedding = get_image_embedding_cached(frame, self.model, self.processor, self.device, self.cache_path)
+
+		for _, existing_embedding in self.existing_embeddings.items():
+			similarity = cosine_similarity_numpy(current_embedding, existing_embedding)
+			if similarity > threshold:
+				return True
+		
+		return False
+	
+	def add_frame(self, frame, filename):
+		"""Add a new frame to the cache."""
+		embedding = get_image_embedding_cached(frame, self.model, self.processor, self.device, self.cache_path)
+		self.existing_embeddings[filename] = embedding
 
 def enhanced_black_detection(frame, black_threshold=15, percentage_threshold=0.85):
-    """Enhanced black frame detection with better thresholding."""
-    if frame is None or frame.size == 0:
-        return True
-    
-    # Convert to grayscale
-    gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
-    
-    # Use Otsu's thresholding for adaptive threshold selection
-    _, binary = cv2.threshold(gray, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
-    
-    # Calculate percentage of dark pixels
-    dark_pixels = np.sum(binary < black_threshold)
-    total_pixels = binary.size
-    
-    return (dark_pixels / total_pixels) >= percentage_threshold
+	"""Enhanced black frame detection with better thresholding."""
+	if frame is None or frame.size == 0:
+		return True
+	
+	# Convert to grayscale
+	gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+	
+	# Use Otsu's thresholding for adaptive threshold selection
+	_, binary = cv2.threshold(gray, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
+	
+	# Calculate percentage of dark pixels
+	dark_pixels = np.sum(binary < black_threshold)
+	total_pixels = binary.size
+	
+	return (dark_pixels / total_pixels) >= percentage_threshold
 
 
 def detect_freeze_frame(frame, previous_frames, threshold=0.95):
-    """Detect static/freeze frames by comparing with previous frames."""
-    if len(previous_frames) < 3:
-        return False
-    
-    # Compare with last few frames
-    for prev_frame in previous_frames[-3:]:
-        # Calculate structural similarity
-        gray_current = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
-        gray_prev = cv2.cvtColor(prev_frame, cv2.COLOR_BGR2GRAY)
-        
-        # Simple pixel difference method
-        diff = cv2.absdiff(gray_current, gray_prev)
-        similarity = 1.0 - (np.mean(diff) / 255.0)
-        
-        if similarity > threshold:
-            return True
-    return False
+	"""Detect static/freeze frames by comparing with previous frames."""
+	if len(previous_frames) < 3:
+		return False
+	
+	# Compare with last few frames
+	for prev_frame in previous_frames[-3:]:
+		# Calculate structural similarity
+		gray_current = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+		gray_prev = cv2.cvtColor(prev_frame, cv2.COLOR_BGR2GRAY)
+		
+		# Simple pixel difference method
+		diff = cv2.absdiff(gray_current, gray_prev)
+		similarity = 1.0 - (np.mean(diff) / 255.0)
+		
+		if similarity > threshold:
+			return True
+	return False
 
 
 def detect_low_information(frame, entropy_threshold=4.0):
-    """Detect frames with low information content using entropy."""
-    gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
-    
-    # Calculate histogram
-    hist = cv2.calcHist([gray], [0], None, [256], [0, 256])
-    hist = hist.flatten()
-    hist = hist[hist > 0]  # Remove zero entries
-    
-    # Calculate entropy
-    prob = hist / hist.sum()
-    entropy = -np.sum(prob * np.log2(prob))
-    
-    return entropy < entropy_threshold
+	"""Detect frames with low information content using entropy."""
+	gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+	
+	# Calculate histogram
+	hist = cv2.calcHist([gray], [0], None, [256], [0, 256])
+	hist = hist.flatten()
+	hist = hist[hist > 0]  # Remove zero entries
+	
+	# Calculate entropy
+	prob = hist / hist.sum()
+	entropy = -np.sum(prob * np.log2(prob))
+	
+	return entropy < entropy_threshold
 
 
 def detect_text_heavy_frame(frame, text_ratio_threshold=0.3):
-    """Detect frames that are primarily text (often less meaningful for scene analysis)."""
-    gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
-    
-    # Apply morphological operations to detect text-like structures
-    kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (3, 3))
-    morph = cv2.morphologyEx(gray, cv2.MORPH_CLOSE, kernel)
-    
-    # Edge detection
-    edges = cv2.Canny(morph, 50, 150)
-    
-    # Find contours that might be text
-    contours, _ = cv2.findContours(edges, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
-    
-    text_like_contours = 0
-    for contour in contours:
-        area = cv2.contourArea(contour)
-        x, y, w, h = cv2.boundingRect(contour)
-        aspect_ratio = w / h if h > 0 else 0
-        
-        # Text-like characteristics: small area, specific aspect ratio
-        if 100 < area < 5000 and 0.1 < aspect_ratio < 10:
-            text_like_contours += 1
-    
-    total_area = frame.shape[0] * frame.shape[1]
-    text_ratio = text_like_contours / (total_area / 1000)  # Normalize
-    
-    return text_ratio > text_ratio_threshold
+	"""Detect frames that are primarily text (often less meaningful for scene analysis)."""
+	gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+	
+	# Apply morphological operations to detect text-like structures
+	kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (3, 3))
+	morph = cv2.morphologyEx(gray, cv2.MORPH_CLOSE, kernel)
+	
+	# Edge detection
+	edges = cv2.Canny(morph, 50, 150)
+	
+	# Find contours that might be text
+	contours, _ = cv2.findContours(edges, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+	
+	text_like_contours = 0
+	for contour in contours:
+		area = cv2.contourArea(contour)
+		x, y, w, h = cv2.boundingRect(contour)
+		aspect_ratio = w / h if h > 0 else 0
+		
+		# Text-like characteristics: small area, specific aspect ratio
+		if 100 < area < 5000 and 0.1 < aspect_ratio < 10:
+			text_like_contours += 1
+	
+	total_area = frame.shape[0] * frame.shape[1]
+	text_ratio = text_like_contours / (total_area / 1000)  # Normalize
+	
+	return text_ratio > text_ratio_threshold
 
 
 def is_meaningless_frame(frame):
-    """
-    Comprehensive meaningless frame detection combining multiple methods.
-    """
-    if frame is None or frame.size == 0:
-        return True, "Empty frame"
-    
-    # 1. Enhanced black frame detection
-    if enhanced_black_detection(frame):
-        return True, "Black frame"
-    
-    # 2. Low sharpness detection (using your existing methods)
-    sharpness = fast_sharpness_assessment(cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY))
-    if sharpness < 10:  # Adjust threshold based on your needs
-        return True, "Blurry frame"
-    
-    # 3. Low information content
-    if detect_low_information(frame):
-        return True, "Low information content"
-    
-    # 4. Text-heavy frames (optional, depending on use case)
-    if detect_text_heavy_frame(frame):
-        return True, "Text-heavy frame"
-    
-    return False, "Valid frame"
+	"""
+	Comprehensive meaningless frame detection combining multiple methods.
+	"""
+	if frame is None or frame.size == 0:
+		return True, "Empty frame"
+	
+	# 1. Enhanced black frame detection
+	if enhanced_black_detection(frame):
+		return True, "Black frame"
+	
+	# 2. Low sharpness detection (using your existing methods)
+	sharpness = fast_sharpness_assessment(cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY))
+	if sharpness < 10:  # Adjust threshold based on your needs
+		return True, "Blurry frame"
+	
+	# 3. Low information content
+	if detect_low_information(frame):
+		return True, "Low information content"
+	
+	# 4. Text-heavy frames (optional, depending on use case)
+	if detect_text_heavy_frame(frame):
+		return True, "Text-heavy frame"
+	
+	return False, "Valid frame"
 
 
 def extract_sharpest_scene_frame(cap, scene_start: float, scene_end: float, fps: float, frames_dir: str, frame_index: int, similarity_cache: FrameSimilarityCache, sharpness_method='composite') -> Tuple[Optional[str], float, Optional[np.ndarray]]:
@@ -701,33 +662,68 @@ def detect_scenes(video_path: str, frame_timestamps: List[float], threshold: flo
 
 
 def extract_scenes(video_path: str, frame_timestamp: List[float], dialogues, cache_path, frames_dir, threshold: float = 30.0):
-	cache_dir = f"{cache_path}/extract_scenes.json"
+	try:
+		cache_dir = f"{cache_path}/extract_scenes.json"
 
-	if os.path.exists(cache_dir) and not frame_timestamp:
-		logger_config.info(f"Using cached scene detection: {video_path}")
-		with open(cache_dir, "r") as f:
-			data = json.load(f)
-		return data
+		if os.path.exists(cache_dir) and not frame_timestamp:
+			logger_config.info(f"Using cached scene detection: {video_path}")
+			with open(cache_dir, "r") as f:
+				data = json.load(f)
+			return data
 
-	print("[INFO] Detecting scenes...")
-	scenes = run_transnetv2(video_path, frame_timestamp)
-	if len(scenes) == 0:
-		raise ValueError("scenes is empty")
+		print("[INFO] Detecting scenes...")
+		scenes = run_transnetv2(video_path, frame_timestamp)
+		if len(scenes) == 0:
+			raise ValueError("scenes is empty")
 
-	print("[INFO] Mapping dialogues to scenes and extracting frames...")
-	scene_dialogue_map = map_dialogues_to_scenes(scenes, dialogues, video_path, frames_dir, cache_path)
+		print("[INFO] Mapping dialogues to scenes and extracting frames...")
+		scene_dialogue_map = map_dialogues_to_scenes(scenes, dialogues, video_path, frames_dir, cache_path)
 
-	if len(dialogues) > 0:
-		print("[INFO] Combining consecutive scenes with identical dialogues...")
-		# scene_dialogue_map = combine_consecutive_same_dialogues(scene_dialogue_map)
-		scene_dialogue_map = combine_dialogues(scene_dialogue_map)
+		if len(dialogues) > 0:
+			print("[INFO] Combining consecutive scenes with identical dialogues...")
+			# scene_dialogue_map = combine_consecutive_same_dialogues(scene_dialogue_map)
+			scene_dialogue_map = combine_dialogues(scene_dialogue_map)
 
-	with open(cache_dir, "w", encoding="utf-8") as f:
-		json.dump(scene_dialogue_map, f, indent=2)
-	print(f"\n[INFO] Mapping saved to {cache_dir}")
+		with open(cache_dir, "w", encoding="utf-8") as f:
+			json.dump(scene_dialogue_map, f, indent=2)
+		print(f"\n[INFO] Mapping saved to {cache_dir}")
 
-	return scene_dialogue_map
+		return scene_dialogue_map
+	except Exception as e:
+		cleanup_models()
+		raise e
 
+def cleanup_models():
+    """Clean up models and free memory."""
+    global SIMILARITY_MODELS, EMBEDDING_CACHE
+    
+    if SIMILARITY_MODELS is not None:
+        model, processor, device = SIMILARITY_MODELS
+        
+        if model is not None:
+            if hasattr(model, 'cpu'):
+                model.cpu()
+            del model
+        
+        if processor is not None:
+            del processor
+        
+        SIMILARITY_MODELS = None
+    
+    EMBEDDING_CACHE.clear()
+    
+    import gc
+    gc.collect()
+    
+    try:
+        import torch
+        if torch.cuda.is_available():
+            torch.cuda.empty_cache()
+            torch.cuda.synchronize()
+    except ImportError:
+        pass
+    
+    print("[INFO] Models and cache cleaned up successfully")
 
 if __name__ == "__main__":
 	video_path = "input.mkv"
