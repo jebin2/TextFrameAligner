@@ -35,10 +35,11 @@ def run_transnetv2(video_path: str, frame_timestamps=None, start_from_sec=-1, en
 
 	scene_seconds = []
 	for start, end in tqdm(scene_frames, desc="Converting frames to seconds"):
-		if start_sec < start_from_sec or (end_from_sec != -1 and end > end_from_sec):
-			continue
 		start_sec = start / fps
 		end_sec = end / fps
+
+		if start_sec < start_from_sec or (end_from_sec != -1 and end_sec > end_from_sec):
+			continue
 		scene_seconds.append((start_sec, end_sec))
 
 	if frame_timestamps:
