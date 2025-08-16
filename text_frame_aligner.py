@@ -509,6 +509,20 @@ class TextFrameAligner:
 
 		return results
 
+	def is_same_sentence(self, sentence_1, sentence_2, threshold=0.9):
+		def clean_text(text: str) -> str:
+			# Keep only alphabetic characters (make lowercase to ignore case)
+			return re.sub(r'[^a-zA-Z]', '', text).lower()
+
+		# Clean both
+		sentence_1 = clean_text(sentence_1)
+		sentence_2 = clean_text(sentence_2)
+
+		import difflib
+		similarity = difflib.SequenceMatcher(None, sentence_1, sentence_2).ratio()
+		logger_config.info(f"is_same_sentence :: similarity-{similarity}")
+		return similarity > threshold
+
 	def split_recap_sentences(self, text: str) -> List[str]:
 		"""Split text into sentences using Gemini"""
 		cache_dir = f"{self.cache_path}/{re.sub(r'[^a-zA-Z]', '', text[:10])}_split_recap_sentences.json"
@@ -536,13 +550,9 @@ class TextFrameAligner:
 			},
 		))
 		sentences = json.loads(model_responses[0])["sentences"]
-		joined_processed = " ".join(sentences).strip()
-		original = text.strip()
 
-		import difflib
-		similarity = difflib.SequenceMatcher(None, joined_processed, original).ratio()
-		if similarity < 0.9:
-			raise ValueError(f"process_narration_text is not correct:: similarity-{similarity}")
+		if self.is_same_sentence(" ".join(sentences), text):
+			raise ValueError(f"process_narration_text is not correct")
 
 		logger_config.info(f"Generated {len(sentences)} sentences")
 		with open(cache_dir, 'w') as f:
