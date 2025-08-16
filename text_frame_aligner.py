@@ -551,7 +551,7 @@ class TextFrameAligner:
 		))
 		sentences = json.loads(model_responses[0])["sentences"]
 
-		if self.is_same_sentence(" ".join(sentences), text):
+		if not self.is_same_sentence(" ".join(sentences), text):
 			raise ValueError(f"process_narration_text is not correct")
 
 		logger_config.info(f"Generated {len(sentences)} sentences")
