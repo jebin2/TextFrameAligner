@@ -4,7 +4,7 @@ import cv2
 from tqdm import tqdm
 from custom_logger import logger_config
 
-def run_transnetv2(video_path: str, frame_timestamps=None, start_from_sec=-1, end_from_sec=-1) -> list:
+def run_transnetv2(video_path: str, frame_timestamps=None, start_from_sec=-1, end_from_sec=-1, skip_segment = [(None, None)]) -> list:
 	transnetv2_dir = "/home/jebineinstein/git/TransNetV2"
 	video_path = os.path.abspath(video_path)
 	scene_txt_path = f"{video_path}.scenes.txt"
@@ -38,8 +38,21 @@ def run_transnetv2(video_path: str, frame_timestamps=None, start_from_sec=-1, en
 		start_sec = start / fps
 		end_sec = end / fps
 
+		# Apply user range filter
 		if start_sec < start_from_sec or (end_from_sec != -1 and end_sec > end_from_sec):
 			continue
+
+		# Skip intro/outro (or other) segments if provided
+		skip_flag = False
+		for skip_start, skip_end in skip_segment:
+			if skip_start is not None and skip_end is not None:
+				# overlap check
+				if not (end_sec < skip_start or start_sec > skip_end):
+					skip_flag = True
+					break
+		if skip_flag:
+			continue
+
 		scene_seconds.append((start_sec, end_sec))
 
 	if frame_timestamps:

@@ -663,7 +663,7 @@ def detect_scenes(video_path: str, frame_timestamps: List[float], threshold: flo
 	return matched_scenes
 
 
-def extract_scenes(video_path: str, frame_timestamp: List[float], dialogues, cache_path, frames_dir, threshold: float = 30.0, start_from_sec = -1, end_from_sec = -1):
+def extract_scenes(video_path: str, frame_timestamp: List[float], dialogues, cache_path, frames_dir, threshold: float = 30.0, start_from_sec = -1, end_from_sec = -1, skip_segment = [(None, None)]):
 	try:
 		cache_dir = f"{cache_path}/extract_scenes.json"
 
@@ -674,7 +674,7 @@ def extract_scenes(video_path: str, frame_timestamp: List[float], dialogues, cac
 			return data
 
 		print("[INFO] Detecting scenes...")
-		scenes = run_transnetv2(video_path, frame_timestamp, start_from_sec=start_from_sec, end_from_sec=end_from_sec)
+		scenes = run_transnetv2(video_path, frame_timestamp, start_from_sec=start_from_sec, end_from_sec=end_from_sec, skip_segment=skip_segment)
 		if len(scenes) == 0:
 			raise ValueError("scenes is empty")
 

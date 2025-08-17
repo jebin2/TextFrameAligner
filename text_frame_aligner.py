@@ -715,12 +715,13 @@ class TextFrameAligner:
 		timestamp_data = input_json.get("timestamp_data", [])
 		start_from_sec = input_json.get("start_from_sec", -1)
 		end_from_sec = input_json.get("end_from_sec", -1)
+		skip_segment = input_json.get("skip_segment", [(None, None)])
 
 		self.set_cache_dir(video_path)
 
 		if not frame_paths and not video_path.endswith((".jpg", ".png", ".jpeg")):
 			# Step 2: Extract scenes
-			extract_scenes_json = extract_scenes_method(video_path, frame_timestamp, timestamp_data, self.cache_path, os.path.join(TEMP_DIR, "frames"), start_from_sec=start_from_sec, end_from_sec=end_from_sec)
+			extract_scenes_json = extract_scenes_method(video_path, frame_timestamp, timestamp_data, self.cache_path, os.path.join(TEMP_DIR, "frames"), start_from_sec=start_from_sec, end_from_sec=end_from_sec, skip_segment=skip_segment)
 		else:
 			extract_scenes_json = []
 			for path in frame_paths:
