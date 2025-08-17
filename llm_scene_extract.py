@@ -47,7 +47,7 @@ def run_transnetv2(video_path: str, frame_timestamps=None, start_from_sec=-1, en
 		for skip_start, skip_end in skip_segment:
 			if skip_start is not None and skip_end is not None:
 				# overlap check
-				if not (end_sec < skip_start or start_sec > skip_end):
+				if not (end_sec < float(skip_start) or start_sec > float(skip_end)):
 					skip_flag = True
 					break
 		if skip_flag:
