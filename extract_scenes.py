@@ -9,6 +9,7 @@ from PIL import Image
 import numpy as np
 from tqdm import tqdm
 from llm_scene_extract import run_transnetv2
+from remove_duplicate import FaceDINO
 
 
 # Global cache for embeddings and similarity models
@@ -313,54 +314,6 @@ def initialize_embedding_model():
 		SIMILARITY_MODELS = (None, None, None)
 		return SIMILARITY_MODELS
 
-
-class FrameSimilarityCache:
-	"""Manages frame similarity checking with pre-computed embeddings."""
-	
-	def __init__(self, frames_dir: str, cache_path: str, model=None, processor=None, device=None):
-		self.frames_dir = frames_dir
-		self.cache_path = cache_path
-		self.model = model
-		self.processor = processor
-		self.device = device
-		self.existing_embeddings = {}
-		self.existing_hashes = {}
-		self._load_existing_frames()
-	
-	def _load_existing_frames(self):
-		"""Pre-compute embeddings/hashes for all existing frames."""
-		if not os.path.exists(self.frames_dir):
-			return
-		
-		print("[INFO] Pre-computing embeddings for existing frames...")
-		existing_files = [f for f in os.listdir(self.frames_dir) 
-						 if f.endswith('.jpg') and not f.startswith('_tmp_')]
-		
-		for filename in tqdm(existing_files, desc="Loading existing frames"):
-			frame_path = os.path.join(self.frames_dir, filename)
-			frame = cv2.imread(frame_path)
-			if frame is not None:
-				# Use embedding-based similarity
-				embedding = get_image_embedding_cached(frame, self.model, self.processor, self.device, self.cache_path)
-				self.existing_embeddings[filename] = embedding
-	
-	def is_similar_to_existing(self, frame, threshold=0.85, hash_threshold=5):
-		"""Check if frame is similar to any existing frames using cached data."""
-		# Embedding-based comparison
-		current_embedding = get_image_embedding_cached(frame, self.model, self.processor, self.device, self.cache_path)
-
-		for _, existing_embedding in self.existing_embeddings.items():
-			similarity = cosine_similarity_numpy(current_embedding, existing_embedding)
-			if similarity > threshold:
-				return True
-		
-		return False
-	
-	def add_frame(self, frame, filename):
-		"""Add a new frame to the cache."""
-		embedding = get_image_embedding_cached(frame, self.model, self.processor, self.device, self.cache_path)
-		self.existing_embeddings[filename] = embedding
-
 def enhanced_black_detection(frame, black_threshold=15, percentage_threshold=0.85):
 	"""Enhanced black frame detection with better thresholding."""
 	if frame is None or frame.size == 0:
@@ -471,8 +424,21 @@ def is_meaningless_frame(frame):
 	
 	return False, "Valid frame"
 
+def resize_to_480p(frame):
+    """
+    Resize a frame to 480p max while keeping aspect ratio.
+    If frame is already <= 480p in height, returns unchanged.
+    """
+    h, w = frame.shape[:2]
+    if h <= 480:
+        return frame  # already small enough
+    
+    scale = 480 / h
+    new_w = int(w * scale)
+    new_h = 480
+    return cv2.resize(frame, (new_w, new_h), interpolation=cv2.INTER_AREA)
 
-def extract_sharpest_scene_frame(cap, scene_start: float, scene_end: float, fps: float, frames_dir: str, frame_index: int, similarity_cache: FrameSimilarityCache, sharpness_method='composite') -> Tuple[Optional[str], float, Optional[np.ndarray]]:
+def extract_sharpest_scene_frame(cap, scene_start: float, scene_end: float, fps: float, frames_dir: str, frame_index: int, dino: FaceDINO, sharpness_method='composite') -> Tuple[Optional[str], float, Optional[np.ndarray]]:
 	"""
 	Extracts the sharpest non-black frame within the scene using cached similarity detection.
 	Returns (frame_path or None, best_timestamp, best_frame or None)
@@ -508,18 +474,16 @@ def extract_sharpest_scene_frame(cap, scene_start: float, scene_end: float, fps:
 		if not ret:
 			continue
 
-		# Check if frame is similar to any existing frames (using cache)
-		if similarity_cache.is_similar_to_existing(frame):
+		dup, _ = dino.is_duplicate(frame)
+		if dup:
 			continue
 
+		frame_480p = resize_to_480p(frame)
 		# Check for black frames
-		if is_mostly_black(frame):
+		if is_mostly_black(frame_480p):
 			continue
 
-		# if is_meaningless_frame(frame)[0]:
-		# 	continue
-
-		gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+		gray = cv2.cvtColor(frame_480p, cv2.COLOR_BGR2GRAY)
 		var = sharpness_func(gray)
 
 		if var > best_var:
@@ -531,10 +495,7 @@ def extract_sharpest_scene_frame(cap, scene_start: float, scene_end: float, fps:
 		frame_filename = f"scene_{frame_index:04d}_at_{best_time:.2f}s.jpg"
 		frame_path = os.path.join(frames_dir, frame_filename)
 		cv2.imwrite(frame_path, best_frame)
-		
-		# Add to similarity cache
-		similarity_cache.add_frame(best_frame, frame_filename)
-		
+
 		return frame_path, best_time, best_frame
 	else:
 		logger_config.warning(f"Failed to extract sharp non-black frame for scene {scene_start:.2f}-{scene_end:.2f}s")
@@ -562,16 +523,14 @@ def map_dialogues_to_scenes(scene_list: List[Tuple[float, float]], dialogues: Li
 		print("[INFO] Using Vision Transformer embeddings for similarity detection")
 	else:
 		print("[INFO] Using perceptual hashing for similarity detection")
-	
-	# Initialize similarity cache
-	similarity_cache = FrameSimilarityCache(frames_dir, cache_path, model, processor, device)
 
 	frames_extracted = 0
 	scene_dialogue_map = []
+	dino = FaceDINO(threshold=0.85)
 
 	for i, (scene_start, scene_end) in tqdm(enumerate(scene_list), total=len(scene_list), desc="Processing scenes"):
 		frame_path, best_time, best_frame = extract_sharpest_scene_frame(
-			cap, scene_start, scene_end, fps, frames_dir, frames_extracted, similarity_cache
+			cap, scene_start, scene_end, fps, frames_dir, frames_extracted, dino
 		)
 
 		if frame_path:
@@ -728,5 +687,9 @@ def cleanup_models():
     print("[INFO] Models and cache cleaned up successfully")
 
 if __name__ == "__main__":
-	video_path = "input.mkv"
-	extract_scenes(video_path)
+	video_path = "../CaptionCreator/media/movie_review/The Reader 2008.mp4"
+	cache_path = "temp2"
+	os.makedirs(cache_path)
+	frames_dir = f"{cache_path}/frames_dir"
+	os.makedirs(frames_dir)
+	extract_scenes(video_path, frame_timestamp=None, dialogues=None, cache_path=cache_path, frames_dir=frames_dir)
