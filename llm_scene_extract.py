@@ -44,6 +44,7 @@ def run_transnetv2(video_path: str, frame_timestamps=None, start_from_sec=-1, en
 
 		# Skip intro/outro (or other) segments if provided
 		skip_flag = False
+		skip_segment = [seg for seg in skip_segment if seg]
 		for skip_start, skip_end in skip_segment:
 			if skip_start is not None and skip_end is not None:
 				# overlap check
