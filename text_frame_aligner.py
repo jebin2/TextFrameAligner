@@ -738,7 +738,7 @@ class TextFrameAligner:
 			from remove_duplicate import FaceDINO
 			dino = FaceDINO(threshold=0.85)
 			for path in frame_paths:
-				dup, _ = dino.is_duplicate()
+				dup, _ = dino.is_duplicate(path)
 				if not dup:
 					extract_scenes_json.append(
 						{
