@@ -1,12 +1,11 @@
 from vision_model import VisionModel
 from PIL import Image
 import torch
-from transformers import AutoProcessor, LlavaOnevisionForConditionalGeneration
 import time
 
 class LlavaOneVision(VisionModel):
 	def load_model(self):
-		from transformers import AutoProcessor, AutoModelForCausalLM
+		from transformers import AutoProcessor, LlavaOnevisionForConditionalGeneration
 		model_id = "llava-hf/llava-onevision-qwen2-0.5b-ov-hf"
 		self.processor = AutoProcessor.from_pretrained(model_id)
 		self.model = LlavaOnevisionForConditionalGeneration.from_pretrained(

@@ -275,23 +275,34 @@ class TextFrameAligner:
 		prompt = "Describe what is happening in this video frame as if you're telling a story. Focus on the main subjects, their actions, the setting, and any important details that would help someone understand the scene's context."
 		from moondream2 import Moondream2
 		from llava_one_vision import LlavaOneVision
+		from google_search_caption import search_google_ai_mode
+		from pally_image_desc import get_caption_from_pally
 		with Moondream2() as vision_model:
 			for i in range(len(extract_scenes_json)):
 				if i in already_processed:
 					continue  # Skip already cached
 
 				start_time = time.time()
-				with Image.open(extract_scenes_json[i]["frame_path"][0]) as img:
-					result = vision_model.generate(img, prompt)
-					captions.append({
-						"scene_caption":result.lower(),
-						"scene_dialogue":extract_scenes_json[i]["dialogue"]
-					})
+				file_path = extract_scenes_json[i]["frame_path"][0]
 
-					# Save partial caption
-					partial_path = os.path.join(partial_dir, f"caption_{i:04d}.json")
-					with open(partial_path, "w") as f:
-						json.dump(result, f, indent=4)
+				result = search_google_ai_mode(f"{prompt} Max words: 100 ONLY", file_path)
+
+				if not result:
+					result = get_caption_from_pally(f"{prompt} Max words: 100 ONLY", file_path)
+
+				if not result:
+					with Image.open(file_path) as img:
+						result = vision_model.generate(img, prompt)
+
+				captions.append({
+					"scene_caption":result.lower(),
+					"scene_dialogue":extract_scenes_json[i]["dialogue"]
+				})
+
+				# Save partial caption
+				partial_path = os.path.join(partial_dir, f"caption_{i:04d}.json")
+				with open(partial_path, "w") as f:
+					json.dump(result, f, indent=4)
 
 				# Estimate duration
 				elapsed = time.time() - start_time
