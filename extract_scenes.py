@@ -551,7 +551,7 @@ def map_dialogues_to_scenes(scene_list: List[Tuple[float, float]], dialogues: Li
 			frames_extracted += 1
 
 	cap.release()
-	
+	del dino
 	# Save embedding cache
 	save_embedding_cache(EMBEDDING_CACHE, cache_path)
 	

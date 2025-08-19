@@ -67,6 +67,36 @@ class FaceDINO:
 
 		return False, float(max_sim)
 
+	def unload(self):
+		"""Free model, embeddings, and clear GPU memory."""
+		try:
+			import gc
+			# Clear embeddings and paths
+			self.embeddings.clear()
+			self.paths.clear()
+
+			# Delete model and processor
+			if hasattr(self, "model"):
+				del self.model
+			if hasattr(self, "processor"):
+				del self.processor
+
+			# Run garbage collection
+			gc.collect()
+
+			# Clear CUDA memory if available
+			if torch.cuda.is_available():
+				torch.cuda.empty_cache()
+				torch.cuda.ipc_collect()
+
+			print("[FaceDINO] Resources unloaded successfully.")
+		except Exception as e:
+			print(f"[FaceDINO] Error during unload: {e}")
+
+	def __del__(self):
+		"""Auto cleanup when object is destroyed."""
+		self.unload()
+
 
 if __name__ == "__main__":
 	import cv2
@@ -83,3 +113,4 @@ if __name__ == "__main__":
 		# 	cv2.imwrite(f"temp2/frame_{frame_id}.jpg", frame)
 			os.remove(f"temp2/{file}")
 	# cap.release()
+	del dino

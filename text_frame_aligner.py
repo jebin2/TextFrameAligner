@@ -735,14 +735,19 @@ class TextFrameAligner:
 			extract_scenes_json = extract_scenes_method(video_path, frame_timestamp, timestamp_data, self.cache_path, os.path.join(TEMP_DIR, "frames"), start_from_sec=start_from_sec, end_from_sec=end_from_sec, skip_segment=skip_segment)
 		else:
 			extract_scenes_json = []
+			from remove_duplicate import FaceDINO
+			dino = FaceDINO(threshold=0.85)
 			for path in frame_paths:
-				extract_scenes_json.append(
-					{
-						"frame_path": [path],
-						"best_time": 0,
-						"dialogue": ""
-					}
-				)
+				dup, _ = dino.is_duplicate()
+				if not dup:
+					extract_scenes_json.append(
+						{
+							"frame_path": [path],
+							"best_time": 0,
+							"dialogue": ""
+						}
+					)
+			del dino
 
 		# Step 3: Generate captions
 		captions = self.caption_generation(extract_scenes_json)
