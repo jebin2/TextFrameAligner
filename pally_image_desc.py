@@ -6,7 +6,7 @@ import os
 
 def get_caption_from_pally(user_prompt, file_path=None):
 	config = BrowserConfig()
-	config.docker_name = "google_search_caption"
+	config.docker_name = "pally_search_caption"
 
 	with BrowserManager(config) as page:
 		try:
