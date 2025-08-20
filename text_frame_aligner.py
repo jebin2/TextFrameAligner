@@ -305,7 +305,7 @@ class TextFrameAligner:
 				start_time = time.time()
 				file_path = extract_scenes_json[i]["frame_path"][0]
 
-				result = self.search_in_ui(f"{prompt} Max words: 100 ONLY", file_path)
+				result = self.search_in_ui(f"{prompt} Keep your description to exactly 100 words or fewer.", file_path)
 
 				if not result:
 					with Image.open(file_path) as img:
