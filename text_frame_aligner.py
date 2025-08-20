@@ -258,7 +258,7 @@ class TextFrameAligner:
 				config.user_data_dir = os.getenv("PROFILE_PATH")
 
 			result = source(user_prompt=prompt, file_path=file_path, config=config)
-			if result:
+			if result and len(result.split(" ")) > 20:
 				return result
 
 		return None
