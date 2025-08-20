@@ -10,7 +10,7 @@ import numpy as np
 from tqdm import tqdm
 from llm_scene_extract import run_transnetv2
 from remove_duplicate import FaceDINO
-
+from person_detector import PersonDetectorYOLO
 
 # Global cache for embeddings and similarity models
 EMBEDDING_CACHE = {}
@@ -300,7 +300,7 @@ def initialize_embedding_model():
 	
 	try:
 		print("[INFO] Loading Vision Transformer model...")
-		processor = AutoImageProcessor.from_pretrained(model_name)
+		processor = AutoImageProcessor.from_pretrained(model_name, use_fast=True)
 		model = AutoModel.from_pretrained(model_name)
 		device = "cuda" if torch.cuda.is_available() else "cpu"
 		model = model.to(device)
@@ -455,7 +455,7 @@ def resize_to_480p(frame):
     new_h = 480
     return cv2.resize(frame, (new_w, new_h), interpolation=cv2.INTER_AREA)
 
-def extract_sharpest_scene_frame(cap, scene_start: float, scene_end: float, fps: float, frames_dir: str, frame_index: int, dino: FaceDINO, sharpness_method='composite') -> Tuple[Optional[str], float, Optional[np.ndarray]]:
+def extract_sharpest_scene_frame(cap, scene_start: float, scene_end: float, fps: float, frames_dir: str, frame_index: int, dino: FaceDINO, person_detect: PersonDetectorYOLO, sharpness_method='composite') -> Tuple[Optional[str], float, Optional[np.ndarray]]:
 	"""
 	Extracts the sharpest non-black frame within the scene using cached similarity detection.
 	Returns (frame_path or None, best_timestamp, best_frame or None)
@@ -491,6 +491,9 @@ def extract_sharpest_scene_frame(cap, scene_start: float, scene_end: float, fps:
 		if not ret:
 			continue
 
+		if person_detect is not None and not person_detect.has_person(frame):
+			continue
+
 		dup, _ = dino.is_duplicate(frame)
 		if dup:
 			continue
@@ -518,7 +521,6 @@ def extract_sharpest_scene_frame(cap, scene_start: float, scene_end: float, fps:
 		logger_config.warning(f"Failed to extract sharp non-black frame for scene {scene_start:.2f}-{scene_end:.2f}s")
 		return None, best_time, None
 
-
 def map_dialogues_to_scenes(scene_list: List[Tuple[float, float]], dialogues: List[dict],
 							video_path: str, frames_dir: str, cache_path: str) -> List[dict]:
 	"""
@@ -544,17 +546,18 @@ def map_dialogues_to_scenes(scene_list: List[Tuple[float, float]], dialogues: Li
 	frames_extracted = 0
 	scene_dialogue_map = []
 	dino = FaceDINO(threshold=0.85)
+	person_detect = None #PersonDetectorYOLO()
 
 	for i, (scene_start, scene_end) in tqdm(enumerate(scene_list), total=len(scene_list), desc="Processing scenes"):
 		frame_path, best_time, best_frame = extract_sharpest_scene_frame(
-			cap, scene_start, scene_end, fps, frames_dir, frames_extracted, dino
+			cap, scene_start, scene_end, fps, frames_dir, frames_extracted, dino, person_detect
 		)
 
 		if frame_path:
 			scene_dialogues = [
 				d for d in dialogues
 				if d['end'] >= scene_start and d['start'] <= scene_end
-			]
+			] if dialogues else []
 
 			scene_dialogue_map.append({
 				"scene_start": scene_start,
@@ -638,6 +641,8 @@ def detect_scenes(video_path: str, frame_timestamps: List[float], threshold: flo
 
 	return matched_scenes
 
+def consecutive_pairs(n: int):
+    return [(float(i), float(i+1)) for i in range(n)]
 
 def extract_scenes(video_path: str, frame_timestamp: List[float], dialogues, cache_path, frames_dir, threshold: float = 30.0, start_from_sec = -1, end_from_sec = -1, skip_segment = [(None, None)]):
 	try:
@@ -654,10 +659,12 @@ def extract_scenes(video_path: str, frame_timestamp: List[float], dialogues, cac
 		if len(scenes) == 0:
 			raise ValueError("scenes is empty")
 
+		# scenes: list[tuple[float, float]] = consecutive_pairs(1170)
+
 		print("[INFO] Mapping dialogues to scenes and extracting frames...")
 		scene_dialogue_map = map_dialogues_to_scenes(scenes, dialogues, video_path, frames_dir, cache_path)
 
-		if len(dialogues) > 0:
+		if dialogues and len(dialogues) > 0:
 			print("[INFO] Combining consecutive scenes with identical dialogues...")
 			# scene_dialogue_map = combine_consecutive_same_dialogues(scene_dialogue_map)
 			scene_dialogue_map = combine_dialogues(scene_dialogue_map)
@@ -704,8 +711,10 @@ def cleanup_models():
     print("[INFO] Models and cache cleaned up successfully")
 
 if __name__ == "__main__":
-	video_path = "../CaptionCreator/media/movie_review/The Reader 2008.mp4"
+	video_path = "../CaptionCreator/media/anime_shorts/027_-_Nimbus_Speed.mkv"
 	cache_path = "temp2"
+	import shutil
+	shutil.rmtree(cache_path)
 	os.makedirs(cache_path)
 	frames_dir = f"{cache_path}/frames_dir"
 	os.makedirs(frames_dir)
