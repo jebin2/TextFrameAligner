@@ -217,3 +217,5 @@ get_caption_from_pally*.png
 search_google_ai_mode*.png
 tempOutput/
 reuse/
+chat_bot_ui_handler_logs/
+yolov8x6_animeface.pt

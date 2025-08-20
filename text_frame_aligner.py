@@ -767,7 +767,10 @@ class TextFrameAligner:
 			del dino
 
 		# Step 3: Generate captions
-		captions = self.caption_generation(extract_scenes_json)
+		# captions = self.caption_generation(extract_scenes_json)
+		from caption_generation import MultiTypeCaptionGenerator
+		multi_cap_gen = MultiTypeCaptionGenerator(self.cache_path)
+		captions = multi_cap_gen.caption_generation(extract_scenes_json)
 
 		# Step 7: Process text
 		sentences = self.split_recap_sentences(recap_text)
