@@ -111,6 +111,6 @@ if __name__ == "__main__":
 			frame_id += 1
 			print(f"Frame {frame_id}: duplicate={dup}, sim={sim:.3f}")
 		# 	cv2.imwrite(f"temp2/frame_{frame_id}.jpg", frame)
-			os.remove(f"temp2/{file}")
+			# os.remove(f"temp2/{file}")
 	# cap.release()
 	del dino

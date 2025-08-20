@@ -241,6 +241,28 @@ class TextFrameAligner:
 			text_features = self.vision_model.get_text_features(**inputs)
 		return text_features.cpu()
 
+	def search_in_ui(self, prompt, file_path):
+		from chat_bot_ui_handler import search_google_ai_mode, get_caption_from_pally, qwen_ui_chat, perplexity_ui_chat
+		from browser_manager.browser_config import BrowserConfig
+		import os
+
+		sources = [search_google_ai_mode, get_caption_from_pally, qwen_ui_chat, perplexity_ui_chat]
+
+		for source in sources:
+			config = BrowserConfig()
+
+			# Use a different profile for perplexity
+			if source.__name__ == "perplexity_ui_chat":
+				config.user_data_dir = os.getenv("PROFILE_PATH_1")
+			else:
+				config.user_data_dir = os.getenv("PROFILE_PATH")
+
+			result = source(user_prompt=prompt, file_path=file_path, config=config)
+			if result:
+				return result
+
+		return None
+
 	def caption_generation(self, extract_scenes_json) -> List[str]:
 		cache_dir = f"{self.cache_path}/caption_generation.json"
 		partial_dir = os.path.join(self.cache_path, "partial_captions")
@@ -275,8 +297,6 @@ class TextFrameAligner:
 		prompt = "Describe what is happening in this video frame as if you're telling a story. Focus on the main subjects, their actions, the setting, and any important details that would help someone understand the scene's context."
 		from moondream2 import Moondream2
 		from llava_one_vision import LlavaOneVision
-		from google_search_caption import search_google_ai_mode
-		from pally_image_desc import get_caption_from_pally
 		with Moondream2() as vision_model:
 			for i in range(len(extract_scenes_json)):
 				if i in already_processed:
@@ -285,10 +305,7 @@ class TextFrameAligner:
 				start_time = time.time()
 				file_path = extract_scenes_json[i]["frame_path"][0]
 
-				result = search_google_ai_mode(f"{prompt} Max words: 100 ONLY", file_path)
-
-				if not result:
-					result = get_caption_from_pally(f"{prompt} Max words: 100 ONLY", file_path)
+				result = self.search_in_ui(f"{prompt} Max words: 100 ONLY", file_path)
 
 				if not result:
 					with Image.open(file_path) as img:
