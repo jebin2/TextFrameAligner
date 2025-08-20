@@ -30,8 +30,6 @@ import traceback
 from aistudio_ui_handler import run_gemini_generation
 
 TEMP_DIR = os.path.abspath("temp_dir")
-CACHE_DIR = f"{TEMP_DIR}/cache_dir"
-OUTPUT_JSON = f'{TEMP_DIR}/output.json'
 
 class TextFrameAligner:
 	def __init__(self, 
@@ -85,11 +83,10 @@ class TextFrameAligner:
 	def set_cache_dir(self, identifier: str) -> str:
 		"""Generates a unique cache directory path for a given identifier."""
 		content_hash = hashlib.md5(identifier.encode()).hexdigest()
-		cache_path = os.path.join(CACHE_DIR, content_hash)
-		if not os.path.exists(cache_path):
+		self.cache_path = os.path.join(TEMP_DIR, content_hash)
+		if not os.path.exists(self.cache_path):
 			self.reset()
-		os.makedirs(cache_path, exist_ok=True)
-		self.cache_path = cache_path
+		os.makedirs(self.cache_path, exist_ok=True)
 
 	def load_vision_model(self):
 		"""Load SigLIP or CLIP model for vision-text matching"""
@@ -673,7 +670,7 @@ class TextFrameAligner:
 					"scene_caption": captions[frame_idx],
 				})
 				# Save frame
-				output_path = os.path.join(TEMP_DIR, f"sentence_{i:02d}_frame_{frame_idx}.jpg")
+				output_path = os.path.join(self.cache_path, f"sentence_{i:02d}_frame_{frame_idx}.jpg")
 				shutil.copy2(extract_scenes_json[frame_idx]["frame_path"][0], output_path)
 
 				# Log progress
@@ -719,7 +716,7 @@ class TextFrameAligner:
 				"scene_caption": captions[best_idx],
 			})
 			# Save frame
-			output_path = os.path.join(TEMP_DIR, f"sentence_{i:02d}_frame_{best_idx}.jpg")
+			output_path = os.path.join(self.cache_path, f"sentence_{i:02d}_frame_{best_idx}.jpg")
 			shutil.copy2(frame_paths[best_idx], output_path)
 
 			# Log progress
@@ -749,7 +746,7 @@ class TextFrameAligner:
 
 		if not frame_paths and not video_path.endswith((".jpg", ".png", ".jpeg")):
 			# Step 2: Extract scenes
-			extract_scenes_json = extract_scenes_method(video_path, frame_timestamp, timestamp_data, self.cache_path, os.path.join(TEMP_DIR, "frames"), start_from_sec=start_from_sec, end_from_sec=end_from_sec, skip_segment=skip_segment)
+			extract_scenes_json = extract_scenes_method(video_path, frame_timestamp, timestamp_data, self.cache_path, os.path.join(self.cache_path, "frames"), start_from_sec=start_from_sec, end_from_sec=end_from_sec, skip_segment=skip_segment)
 		else:
 			extract_scenes_json = []
 			from remove_duplicate import FaceDINO
@@ -777,7 +774,7 @@ class TextFrameAligner:
 
 		# Step 8: Align sentences to frames
 		logger_config.info("🎯 STARTING SENTENCE-FRAME ALIGNMENT")
-		[f.unlink() for f in Path(TEMP_DIR).glob("sentence_*") if f.is_file()]
+		[f.unlink() for f in Path(self.cache_path).glob("sentence_*") if f.is_file()]
 
 		sentences = [s.lower() for s in sentences]
 
@@ -796,10 +793,10 @@ class TextFrameAligner:
 			raise ValueError("Result is empty")
 		
 		# Save output
-		with open(OUTPUT_JSON, 'w') as f:
+		with open(f'{self.cache_path}/output.json', 'w') as f:
 			json.dump(result, f, indent=4)
 		
-		logger_config.info(f"✅ ALIGNMENT COMPLETE! Results saved to {OUTPUT_JSON}")
+		logger_config.info(f"✅ ALIGNMENT COMPLETE! Results saved to {self.cache_path}/output.json")
 		logger_config.info(f"⏱️ Total processing time: {time.time() - overall_start:.2f} seconds")
 
 		return result
@@ -807,8 +804,27 @@ class TextFrameAligner:
 	def reset(self):
 		"""Reset cached data and free memory"""
 		logger_config.info("Resetting TextFrameAligner")
-		shutil.rmtree(TEMP_DIR, ignore_errors=True)
 		os.makedirs(TEMP_DIR, exist_ok=True)
+		# Get list of subfolders with access time
+		subfolders = [
+			(f, os.path.getatime(os.path.join(TEMP_DIR, f)))
+			for f in os.listdir(TEMP_DIR)
+			if os.path.isdir(os.path.join(TEMP_DIR, f))
+		]
+
+		# If more than 10 subfolders, delete oldest ones
+		if len(subfolders) > 10:
+			# Sort by access time (oldest first)
+			subfolders.sort(key=lambda x: x[1])
+			folders_to_delete = subfolders[:-10]  # keep last 10
+
+			for folder, _ in folders_to_delete:
+				folder_path = os.path.join(TEMP_DIR, folder)
+				try:
+					shutil.rmtree(folder_path, ignore_errors=True)
+					logger_config.info(f"Deleted old temp folder: {folder_path}")
+				except Exception as e:
+					logger_config.error(f"Error deleting {folder_path}: {e}")
 
 		# Clear cached data
 		self.subtitles = []
