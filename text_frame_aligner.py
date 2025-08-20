@@ -25,7 +25,7 @@ from sklearn.metrics.pairwise import cosine_similarity
 import string
 import shutil
 from gemiwrap import GeminiWrapper
-from extract_scenes import extract_scenes as extract_scenes_method
+from extract_scenes import extract_scenes as extract_scenes_method, resize_to_480p
 import traceback
 from aistudio_ui_handler import run_gemini_generation
 
@@ -304,12 +304,12 @@ class TextFrameAligner:
 
 				start_time = time.time()
 				file_path = extract_scenes_json[i]["frame_path"][0]
-
+				result = None
 				result = self.search_in_ui(f"{prompt} Keep your description to exactly 100 words or fewer.", file_path)
 
 				if not result:
 					with Image.open(file_path) as img:
-						result = vision_model.generate(img, prompt)
+						result = vision_model.generate(resize_to_480p(img), prompt)
 
 				captions.append({
 					"scene_caption":result.lower(),

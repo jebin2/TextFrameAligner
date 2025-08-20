@@ -424,11 +424,28 @@ def is_meaningless_frame(frame):
 	
 	return False, "Valid frame"
 
+def resize_to_480p_pil(frame: Image.Image) -> Image.Image:
+    """
+    Resize an image to 480p max height while keeping aspect ratio.
+    """
+    w, h = frame.size
+    if h <= 480:
+        return frame
+    
+    scale = 480 / h
+    new_w = int(w * scale)
+    new_h = 480
+    return frame.resize((new_w, new_h), Image.Resampling.LANCZOS)
+
 def resize_to_480p(frame):
     """
     Resize a frame to 480p max while keeping aspect ratio.
     If frame is already <= 480p in height, returns unchanged.
     """
+    # Ensure numpy array
+    if isinstance(frame, Image.Image):
+        return resize_to_480p_pil(frame)
+
     h, w = frame.shape[:2]
     if h <= 480:
         return frame  # already small enough
