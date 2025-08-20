@@ -15,6 +15,9 @@ class Moondream2(VisionModel):
 
 	def generate(self, image: Image.Image, text: str = "") -> str:
 		with torch.inference_mode():
+			if isinstance(image, str):
+				with Image.open(image) as img:
+					return self.model.caption(img, length="normal")["caption"]
 			return self.model.caption(image, length="normal")["caption"]
 
 	def query(self, image: Image.Image, text: str = "") -> str:
