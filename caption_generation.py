@@ -215,7 +215,7 @@ class MultiTypeCaptionGenerator:
 		
 		# Optionally clean up temp file
 		# os.remove(temp_path)
-		
+		del self.model
 		return captions
 
 	# Dummy placeholders for different search_in_ui types
