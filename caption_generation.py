@@ -218,7 +218,6 @@ class MultiTypeCaptionGenerator:
 		del self.model
 		return captions
 
-	# Dummy placeholders for different search_in_ui types
 	def search_in_ui_type(self, type_id, prompt, file_path):
 		from chat_bot_ui_handler import search_google_ai_mode, get_caption_from_pally, qwen_ui_chat, perplexity_ui_chat, gemini_ui_chat, grok_ui_chat, meta_ui_chat
 		from browser_manager.browser_config import BrowserConfig
@@ -244,7 +243,7 @@ class MultiTypeCaptionGenerator:
 					config.additionl_docker_flag = ' '.join(additional_flags)
 
 			result = source(user_prompt=prompt, file_path=file_path, config=config)
-			if result and len(result.split(" ")) > 20:
+			if result and len(result.split(" ")) > 40:
 				return result
 
 		except Exception as e:

@@ -2,9 +2,13 @@ from ultralytics import YOLO
 
 class PersonDetectorYOLO:
     def __init__(self, model_path="yolov8x6_animeface.pt"):
-        self.model = YOLO(model_path)
+        self.model_path = model_path
+        self.model = None
 
     def has_person(self, frame):
+        if not self.model:
+            self.model = YOLO(self.model_path)
+
         results = self.model(frame, verbose=False)  # Run inference
         for result in results:
             # Check detected class IDs for person (class 0 in COCO)

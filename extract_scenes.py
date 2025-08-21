@@ -12,15 +12,9 @@ from llm_scene_extract import run_transnetv2
 from remove_duplicate import FaceDINO
 from person_detector import PersonDetectorYOLO
 
-# Global cache for embeddings and similarity models
-EMBEDDING_CACHE = {}
-SIMILARITY_MODELS = None
-
-
 def variance_of_laplacian(image):
 	"""Original method - Blur detection using Laplacian variance."""
 	return cv2.Laplacian(image, cv2.CV_64F).var()
-
 
 def sobel_variance(image):
 	"""Sobel edge detection variance - often more robust than Laplacian."""
@@ -206,71 +200,6 @@ def get_frame_hash(frame):
 	resized = cv2.resize(gray, (32, 32))  # Very small for fast hashing
 	return hash((resized.mean(), resized.var()))
 
-
-def load_embedding_cache(cache_path: str) -> Dict:
-	"""Load embedding cache from disk."""
-	cache_file = os.path.join(cache_path, "embedding_cache.pkl")
-	if os.path.exists(cache_file):
-		try:
-			with open(cache_file, 'rb') as f:
-				return pickle.load(f)
-		except Exception as e:
-			logger_config.warning(f"Failed to load embedding cache: {e}")
-	return {}
-
-
-def save_embedding_cache(cache: Dict, cache_path: str):
-	"""Save embedding cache to disk."""
-	os.makedirs(cache_path, exist_ok=True)
-	cache_file = os.path.join(cache_path, "embedding_cache.pkl")
-	try:
-		with open(cache_file, 'wb') as f:
-			pickle.dump(cache, f)
-	except Exception as e:
-		logger_config.warning(f"Failed to save embedding cache: {e}")
-
-
-def get_image_embedding_cached(frame, model, processor, device, cache_path: str):
-	"""Extract embedding with caching."""
-	global EMBEDDING_CACHE
-	
-	# Create a hash for this frame
-	frame_hash = get_frame_hash(frame)
-	
-	# Check cache first
-	if frame_hash in EMBEDDING_CACHE:
-		return EMBEDDING_CACHE[frame_hash]
-	
-	# Compute embedding
-	embedding = get_image_embedding(frame, model, processor, device)
-	
-	# Cache it
-	EMBEDDING_CACHE[frame_hash] = embedding
-	
-	return embedding
-
-
-def get_image_embedding(frame, model, processor, device):
-	"""Extract embedding from a frame using a vision transformer model."""
-	import torch
-	from PIL import Image
-	
-	# Convert BGR to RGB for PIL
-	rgb_frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-	pil_image = Image.fromarray(rgb_frame)
-	
-	# Process image
-	inputs = processor(images=pil_image, return_tensors="pt").to(device)
-	
-	# Extract embedding
-	with torch.inference_mode():
-		outputs = model(**inputs)
-		# Use the [CLS] token embedding (first token of last hidden state)
-		embedding = outputs.last_hidden_state[:, 0].cpu().numpy().flatten()
-	
-	return embedding
-
-
 def cosine_similarity_numpy(vec1, vec2):
 	"""Compute cosine similarity between two vectors."""
 	import numpy as np
@@ -282,37 +211,6 @@ def cosine_similarity_numpy(vec1, vec2):
 		return 0.0
 	
 	return dot_product / (norm_vec1 * norm_vec2)
-
-
-def initialize_embedding_model():
-	"""Initialize the vision transformer model for embeddings."""
-	global SIMILARITY_MODELS
-	
-	# Return cached models if available
-	if SIMILARITY_MODELS is not None:
-		return SIMILARITY_MODELS
-	
-	import torch
-	from transformers import AutoImageProcessor, AutoModel
-	
-	# Use a general-purpose vision model
-	model_name = "google/vit-base-patch16-224-in21k"  # Pre-trained ViT model
-	
-	try:
-		print("[INFO] Loading Vision Transformer model...")
-		processor = AutoImageProcessor.from_pretrained(model_name, use_fast=True)
-		model = AutoModel.from_pretrained(model_name)
-		device = "cuda" if torch.cuda.is_available() else "cpu"
-		model = model.to(device)
-		model.eval()
-		
-		SIMILARITY_MODELS = (model, processor, device)
-		return SIMILARITY_MODELS
-	except Exception as e:
-		print(f"Failed to load embedding model: {e}")
-		print("Falling back to perceptual hashing...")
-		SIMILARITY_MODELS = (None, None, None)
-		return SIMILARITY_MODELS
 
 def enhanced_black_detection(frame, black_threshold=15, percentage_threshold=0.85):
 	"""Enhanced black frame detection with better thresholding."""
@@ -526,22 +424,10 @@ def map_dialogues_to_scenes(scene_list: List[Tuple[float, float]], dialogues: Li
 	"""
 	Map each dialogue to its corresponding scene and save a sharp non-black frame.
 	"""
-	global EMBEDDING_CACHE
-	
+
 	os.makedirs(frames_dir, exist_ok=True)
 	cap = cv2.VideoCapture(video_path)
 	fps = cap.get(cv2.CAP_PROP_FPS)
-	
-	# Load embedding cache
-	EMBEDDING_CACHE = load_embedding_cache(cache_path)
-	
-	# Initialize embedding model (with caching)
-	print("[INFO] Initializing similarity detection model...")
-	model, processor, device = initialize_embedding_model()
-	if model is not None:
-		print("[INFO] Using Vision Transformer embeddings for similarity detection")
-	else:
-		print("[INFO] Using perceptual hashing for similarity detection")
 
 	frames_extracted = 0
 	scene_dialogue_map = []
@@ -572,8 +458,6 @@ def map_dialogues_to_scenes(scene_list: List[Tuple[float, float]], dialogues: Li
 
 	cap.release()
 	del dino
-	# Save embedding cache
-	save_embedding_cache(EMBEDDING_CACHE, cache_path)
 	
 	return scene_dialogue_map
 
@@ -675,40 +559,7 @@ def extract_scenes(video_path: str, frame_timestamp: List[float], dialogues, cac
 
 		return scene_dialogue_map
 	except Exception as e:
-		cleanup_models()
 		raise e
-
-def cleanup_models():
-    """Clean up models and free memory."""
-    global SIMILARITY_MODELS, EMBEDDING_CACHE
-    
-    if SIMILARITY_MODELS is not None:
-        model, processor, device = SIMILARITY_MODELS
-        
-        if model is not None:
-            if hasattr(model, 'cpu'):
-                model.cpu()
-            del model
-        
-        if processor is not None:
-            del processor
-        
-        SIMILARITY_MODELS = None
-    
-    EMBEDDING_CACHE.clear()
-    
-    import gc
-    gc.collect()
-    
-    try:
-        import torch
-        if torch.cuda.is_available():
-            torch.cuda.empty_cache()
-            torch.cuda.synchronize()
-    except ImportError:
-        pass
-    
-    print("[INFO] Models and cache cleaned up successfully")
 
 if __name__ == "__main__":
 	video_path = "../CaptionCreator/media/anime_shorts/027_-_Nimbus_Speed.mkv"
