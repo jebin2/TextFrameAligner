@@ -28,6 +28,7 @@ from gemiwrap import GeminiWrapper
 from extract_scenes import extract_scenes as extract_scenes_method, resize_to_480p
 import traceback
 from aistudio_ui_handler import run_gemini_generation
+from tqdm import tqdm
 
 TEMP_DIR = os.path.abspath("temp_dir")
 
@@ -80,13 +81,18 @@ class TextFrameAligner:
 		
 		logger_config.info("TextFrameAligner initialization completed")
 
-	def set_cache_dir(self, identifier: str) -> str:
+	def set_cache_dir(self, video_path: str) -> str:
 		"""Generates a unique cache directory path for a given identifier."""
-		content_hash = hashlib.md5(identifier.encode()).hexdigest()
-		self.cache_path = os.path.join(TEMP_DIR, content_hash)
+		# content_hash = hashlib.md5(identifier.encode()).hexdigest()
+		self.cache_path = os.path.join(TEMP_DIR, Path(video_path).stem)
 		if not os.path.exists(self.cache_path):
 			self.reset()
 		os.makedirs(self.cache_path, exist_ok=True)
+
+	def get_cache_dir(self, video_path: str) -> str:
+		"""Generates a unique cache directory path for a given identifier."""
+		# content_hash = hashlib.md5(identifier.encode()).hexdigest()
+		return os.path.join(TEMP_DIR, Path(video_path).stem)
 
 	def load_vision_model(self):
 		"""Load SigLIP or CLIP model for vision-text matching"""
@@ -592,7 +598,9 @@ class TextFrameAligner:
 			if os.path.exists(cache_dir):
 				logger_config.info(f"Using cached match_scenes_online")
 				with open(cache_dir, "r") as f:
-					match_scene = json.load(f)
+					try:
+						match_scene = json.load(f)
+					except: match_scene = None
 
 			if not match_scene:
 				text = f"""Scene Captions:: {captions}
@@ -679,7 +687,6 @@ class TextFrameAligner:
 			self.unload_sentence_transformer()
 			return result
 		except Exception as e:
-			os.remove(cache_dir)
 			raise(e)
 
 	def match_scenes_offline(self, captions, sentences, timestamps, frame_paths, timestamp_data):
@@ -724,6 +731,40 @@ class TextFrameAligner:
 
 		return result
 
+	def copy_and_append_json(self, copy_from_split_paths, dest_json_path, json_filename):
+		"""
+		Merge JSON files from multiple old paths into a single JSON file.
+		"""
+		merged = []
+
+		# Load existing data in destination
+		if os.path.exists(dest_json_path):
+			with open(dest_json_path, "r", encoding="utf-8") as f:
+				try:
+					merged = json.load(f)
+				except json.JSONDecodeError:
+					merged = []
+
+		# Append data from old dirs
+		for old_path in copy_from_split_paths:
+			src = Path(f'{self.get_cache_dir(old_path)}/{json_filename}')
+			if src.exists():
+				with open(src, "r", encoding="utf-8") as f:
+					try:
+						data = json.load(f)
+						if isinstance(data, list):
+							merged.extend(data)
+						elif isinstance(data, dict):
+							merged.append(data)
+					except json.JSONDecodeError:
+						continue  # skip bad file
+
+		# Save merged JSON
+		with open(dest_json_path, "w", encoding="utf-8") as f:
+			json.dump(merged, f, indent=4, ensure_ascii=False)
+
+		return merged
+
 	def process(self, input_json_path: str):
 		"""Full processing pipeline"""
 		logger_config.info("🚀 STARTING VIDEO-TEXT ALIGNMENT")
@@ -741,27 +782,32 @@ class TextFrameAligner:
 		start_from_sec = input_json.get("start_from_sec", -1)
 		end_from_sec = input_json.get("end_from_sec", -1)
 		skip_segment = input_json.get("skip_segment", [(None, None)])
+		copy_from_split_paths = input_json.get("copy_from_split_paths", None)
 
 		self.set_cache_dir(video_path)
 
-		if not frame_paths and not video_path.endswith((".jpg", ".png", ".jpeg")):
-			# Step 2: Extract scenes
-			extract_scenes_json = extract_scenes_method(video_path, frame_timestamp, timestamp_data, self.cache_path, os.path.join(self.cache_path, "frames"), start_from_sec=start_from_sec, end_from_sec=end_from_sec, skip_segment=skip_segment)
+		if copy_from_split_paths:
+			extract_scenes_json = self.copy_and_append_json(copy_from_split_paths, f'{self.cache_path}/extract_scenes.json', 'extract_scenes.json')
+			captions = self.copy_and_append_json(copy_from_split_paths, f'{self.cache_path}/caption_generation.json', 'caption_generation.json')
 		else:
-			extract_scenes_json = []
-			from remove_duplicate import FaceDINO
-			dino = FaceDINO(threshold=0.85)
-			for path in frame_paths:
-				dup, _ = dino.is_duplicate(path)
-				if not dup:
-					extract_scenes_json.append(
-						{
-							"frame_path": [path],
-							"best_time": 0,
-							"dialogue": ""
-						}
-					)
-			del dino
+			if not frame_paths and not video_path.endswith((".jpg", ".png", ".jpeg")):
+				# Step 2: Extract scenes
+				extract_scenes_json = extract_scenes_method(video_path, frame_timestamp, timestamp_data, self.cache_path, os.path.join(self.cache_path, "frames"), start_from_sec=start_from_sec, end_from_sec=end_from_sec, skip_segment=skip_segment)
+			else:
+				extract_scenes_json = []
+				from remove_duplicate import FaceDINO
+				dino = FaceDINO(threshold=0.85)
+				for path in frame_paths:
+					dup, _ = dino.is_duplicate(path)
+					if not dup:
+						extract_scenes_json.append(
+							{
+								"frame_path": [path],
+								"best_time": 0,
+								"dialogue": ""
+							}
+						)
+				del dino
 
 		# Step 3: Generate captions
 		# captions = self.caption_generation(extract_scenes_json)

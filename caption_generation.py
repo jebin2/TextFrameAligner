@@ -11,7 +11,7 @@ if os.path.exists(".env"):
 	load_dotenv()
 
 class MultiTypeCaptionGenerator:
-	def __init__(self, cache_path, num_types=9):
+	def __init__(self, cache_path, num_types=10):
 		self.cache_path = cache_path
 		self.num_types = num_types
 		self.lock = Lock()  # for safely updating temp JSON
@@ -219,28 +219,29 @@ class MultiTypeCaptionGenerator:
 		return captions
 
 	def search_in_ui_type(self, type_id, prompt, file_path):
-		from chat_bot_ui_handler import GoogleAISearchChat, AIStudioUIChat, QwenUIChat, PerplexityUIChat, GeminiUIChat, GrokUIChat, MetaUIChat, PallyUIChat
+		from chat_bot_ui_handler import GoogleAISearchChat, AIStudioUIChat, QwenUIChat, PerplexityUIChat, GeminiUIChat, GrokUIChat, MetaUIChat, CopilotUIChat, PallyUIChat
 		from browser_manager.browser_config import BrowserConfig
 		import os
 
-		sources = [GoogleAISearchChat, AIStudioUIChat, QwenUIChat, PerplexityUIChat, GeminiUIChat, GrokUIChat, MetaUIChat, PallyUIChat]
+		sources = [GoogleAISearchChat, AIStudioUIChat, QwenUIChat, PerplexityUIChat, GeminiUIChat, GrokUIChat, MetaUIChat, CopilotUIChat, PallyUIChat]
 		source = sources[type_id % self.num_types-1]
 
 		try:
 			config = BrowserConfig()
-			config.starting_server_port_to_check = [9081, 10081, 11081, 12081, 13081, 14081, 15081, 16081][type_id % self.num_types-1]
-			config.starting_debug_port_to_check = [10224, 11224, 12224, 13224, 14224, 15224, 16224, 17224][type_id % self.num_types-1]
+			config.starting_server_port_to_check = [9081, 10081, 11081, 12081, 13081, 14081, 15081, 16081, 17081][type_id % self.num_types-1]
+			config.starting_debug_port_to_check = [10224, 11224, 12224, 13224, 14224, 15224, 16224, 17224, 18224][type_id % self.num_types-1]
 
 			# Use a different profile for perplexity
-			if source.__name__ == "PerplexityUIChat" or source.__name__ == "GrokUIChat":
+			if source.__name__ == "GrokUIChat" or source.__name__ == "PerplexityUIChat":
 				config.user_data_dir = os.getenv("PROFILE_PATH_1")
 			else:
 				config.user_data_dir = os.getenv("PROFILE_PATH")
-				if source.__name__ == "MetaUIChat" or source.__name__ == "AIStudioUIChat":
-					additional_flags = []
-					additional_flags.append(f'-v {os.getcwd()}/{os.getenv("TEMP_OUTPUT", "chat_bot_ui_handler_logs")}:/home/neko/Downloads')
-					additional_flags.append(f'-v /home/jebineinstein/git/browser_manager/policies.json:/etc/opt/chrome/policies/managed/policies.json')
-					config.additionl_docker_flag = ' '.join(additional_flags)
+
+			if source.__name__ == "MetaUIChat" or source.__name__ == "AIStudioUIChat":
+				additional_flags = []
+				additional_flags.append(f'-v {os.getcwd()}/{os.getenv("TEMP_OUTPUT", "chat_bot_ui_handler_logs")}:/home/neko/Downloads')
+				additional_flags.append(f'-v /home/jebineinstein/git/browser_manager/policies.json:/etc/opt/chrome/policies/managed/policies.json')
+				config.additionl_docker_flag = ' '.join(additional_flags)
 
 			src_obj = source(config=config)
 			result = src_obj.chat(user_prompt=prompt, file_path=file_path)
