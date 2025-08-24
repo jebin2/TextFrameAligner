@@ -3,6 +3,7 @@ from PIL import Image
 import time
 import torch
 import os
+import traceback
 
 class Moondream2(VisionModel):
     def load_model(self):
@@ -80,8 +81,7 @@ class Moondream2(VisionModel):
         if torch.cuda.is_available():
             print("🔧 Moving to GPU...")
             device = torch.device(f"cuda:{torch.cuda.current_device()}")
-            model = model.to(device)
-            model = model.half()  # Convert to fp16 after moving
+            model = model.to(device, dtype=torch.bfloat16)
             print("✅ Successfully moved to GPU")
         
         return model
@@ -92,7 +92,7 @@ class Moondream2(VisionModel):
         
         if torch.cuda.is_available():
             device_map = f"cuda:{torch.cuda.current_device()}"
-            dtype = torch.float16
+            dtype = torch.bfloat16
         else:
             device_map = "cpu"
             dtype = torch.float32
@@ -139,39 +139,23 @@ class Moondream2(VisionModel):
         except RuntimeError as e:
             if "meta" in str(e).lower() or "device" in str(e).lower():
                 print(f"🔄 Device error in generate, attempting model reload: {e}")
-                try:
-                    self.load_model()  # Reload model
-                    return self.generate(image, text)  # Retry once
-                except Exception as e2:
-                    return f"Error after model reload: {str(e2)}"
-            else:
-                return f"Error generating caption: {str(e)}"
-        except Exception as e:
-            return f"Error generating caption: {str(e)}"
+                self.load_model()  # Reload model
+                return self.generate(image, text)  # Retry once
 
     def query(self, image: Image.Image, text: str = "") -> str:
-        try:
-            with torch.inference_mode():
-                result = self.model.query(image, text)
-                return result["answer"] if isinstance(result, dict) else str(result)
-        except Exception as e:
-            return f"Error in query: {str(e)}"
+        with torch.inference_mode():
+            result = self.model.query(image, text)
+            return result["answer"] if isinstance(result, dict) else str(result)
 
     def point(self, image: Image.Image, text: str = "person") -> str:
-        try:
-            with torch.inference_mode():
-                result = self.model.point(image, text)
-                return result["points"] if isinstance(result, dict) else str(result)
-        except Exception as e:
-            return f"Error in point detection: {str(e)}"
+        with torch.inference_mode():
+            result = self.model.point(image, text)
+            return result["points"] if isinstance(result, dict) else str(result)
 
     def detect(self, image: Image.Image, text: str = "face") -> str:
-        try:
-            with torch.inference_mode():
-                result = self.model.detect(image, text)
-                return result["objects"] if isinstance(result, dict) else str(result)
-        except Exception as e:
-            return f"Error in detection: {str(e)}"
+        with torch.inference_mode():
+            result = self.model.detect(image, text)
+            return result["objects"] if isinstance(result, dict) else str(result)
 
 if __name__ == "__main__":
     model = Moondream2()

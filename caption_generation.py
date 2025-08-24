@@ -131,7 +131,7 @@ class MultiTypeCaptionGenerator:
 {self.FYI}"""
 					result = self.search_in_ui_type(type_id, new_prompt, frame_path)
 
-				print(f"📝 Type {type_id} got result for frame {idx}: {bool(result)}")
+				print(f"📝 Type {type_id} got result for frame {idx}: {result}")
 
 				# Update temp JSON with result
 				with self.lock:
