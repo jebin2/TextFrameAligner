@@ -1,0 +1,619 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Frame Character Editor</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            min-height: 100vh;
+            padding: 20px;
+        }
+
+        .container {
+            max-width: 1200px;
+            margin: 0 auto;
+            background: rgba(255, 255, 255, 0.95);
+            backdrop-filter: blur(10px);
+            border-radius: 20px;
+            padding: 30px;
+            box-shadow: 0 20px 40px rgba(0, 0, 0, 0.1);
+        }
+
+        h1 {
+            text-align: center;
+            color: #333;
+            margin-bottom: 30px;
+            font-size: 2.5rem;
+            font-weight: 300;
+            letter-spacing: 2px;
+        }
+
+        .upload-section {
+            text-align: center;
+            margin-bottom: 40px;
+            padding: 30px;
+            border: 2px dashed #667eea;
+            border-radius: 15px;
+            background: rgba(102, 126, 234, 0.05);
+            transition: all 0.3s ease;
+        }
+
+        .upload-section:hover {
+            background: rgba(102, 126, 234, 0.1);
+            transform: translateY(-2px);
+        }
+
+        .file-input {
+            display: none;
+        }
+
+        .upload-button {
+            background: linear-gradient(45deg, #667eea, #764ba2);
+            color: white;
+            padding: 15px 30px;
+            border: none;
+            border-radius: 50px;
+            cursor: pointer;
+            font-size: 1.1rem;
+            font-weight: 500;
+            transition: all 0.3s ease;
+            box-shadow: 0 10px 20px rgba(102, 126, 234, 0.3);
+        }
+
+        .upload-button:hover {
+            transform: translateY(-3px);
+            box-shadow: 0 15px 30px rgba(102, 126, 234, 0.4);
+        }
+
+        .download-button {
+            background: linear-gradient(45deg, #11998e, #38ef7d);
+            color: white;
+            padding: 12px 25px;
+            border: none;
+            border-radius: 25px;
+            cursor: pointer;
+            font-size: 1rem;
+            font-weight: 500;
+            margin: 20px auto;
+            display: block;
+            transition: all 0.3s ease;
+            box-shadow: 0 8px 16px rgba(17, 153, 142, 0.3);
+        }
+
+        .download-button:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 12px 24px rgba(17, 153, 142, 0.4);
+        }
+
+        .frames-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fill, minmax(300px, 1fr));
+            gap: 30px;
+            margin-top: 30px;
+        }
+
+        .frame-card {
+            background: white;
+            border-radius: 15px;
+            overflow: hidden;
+            box-shadow: 0 10px 25px rgba(0, 0, 0, 0.1);
+            transition: all 0.3s ease;
+        }
+
+        .frame-card:hover {
+            transform: translateY(-5px);
+            box-shadow: 0 20px 40px rgba(0, 0, 0, 0.15);
+        }
+
+        .frame-image {
+            width: 100%;
+            height: 200px;
+            object-fit: cover;
+            cursor: pointer;
+            transition: all 0.3s ease;
+        }
+
+        .frame-image:hover {
+            transform: scale(1.05);
+        }
+
+        .frame-info {
+            padding: 20px;
+        }
+
+        .scene-time {
+            color: #667eea;
+            font-weight: 600;
+            font-size: 0.9rem;
+            margin-bottom: 10px;
+        }
+
+        .characters-display {
+            background: #f8f9fa;
+            padding: 10px;
+            border-radius: 8px;
+            margin-top: 10px;
+            min-height: 40px;
+            border-left: 4px solid #667eea;
+        }
+
+        .characters-label {
+            font-size: 0.8rem;
+            color: #666;
+            text-transform: uppercase;
+            letter-spacing: 1px;
+            margin-bottom: 5px;
+        }
+
+        .characters-text {
+            color: #333;
+            font-weight: 500;
+        }
+
+        .modal {
+            display: none;
+            position: fixed;
+            z-index: 1000;
+            left: 0;
+            top: 0;
+            width: 100%;
+            height: 100%;
+            background-color: rgba(0, 0, 0, 0.8);
+            backdrop-filter: blur(5px);
+        }
+
+        .modal-content {
+            background: white;
+            margin: 5% auto;
+            padding: 0;
+            border-radius: 20px;
+            width: 90%;
+            max-width: 600px;
+            overflow: hidden;
+            box-shadow: 0 25px 50px rgba(0, 0, 0, 0.3);
+            animation: modalSlide 0.3s ease;
+        }
+
+        @keyframes modalSlide {
+            from { opacity: 0; transform: translateY(-50px); }
+            to { opacity: 1; transform: translateY(0); }
+        }
+
+        .modal-header {
+            background: linear-gradient(45deg, #667eea, #764ba2);
+            color: white;
+            padding: 25px;
+            position: relative;
+        }
+
+        .modal-title {
+            font-size: 1.5rem;
+            font-weight: 300;
+        }
+
+        .close {
+            position: absolute;
+            right: 25px;
+            top: 50%;
+            transform: translateY(-50%);
+            font-size: 2rem;
+            font-weight: 300;
+            cursor: pointer;
+            transition: all 0.3s ease;
+        }
+
+        .close:hover {
+            transform: translateY(-50%) scale(1.2);
+        }
+
+        .modal-body {
+            padding: 30px;
+        }
+
+        .modal-image {
+            width: 100%;
+            height: 250px;
+            object-fit: cover;
+            border-radius: 10px;
+            margin-bottom: 20px;
+        }
+
+        .input-group {
+            margin-bottom: 20px;
+        }
+
+        .input-label {
+            display: block;
+            margin-bottom: 8px;
+            color: #333;
+            font-weight: 500;
+        }
+
+        .character-input {
+            width: 100%;
+            padding: 15px;
+            border: 2px solid #e1e5e9;
+            border-radius: 10px;
+            font-size: 1rem;
+            transition: all 0.3s ease;
+        }
+
+        .character-input:focus {
+            outline: none;
+            border-color: #667eea;
+            box-shadow: 0 0 0 3px rgba(102, 126, 234, 0.1);
+        }
+
+        .modal-actions {
+            display: flex;
+            gap: 15px;
+            justify-content: flex-end;
+            margin-top: 20px;
+        }
+
+        .save-btn, .cancel-btn {
+            padding: 12px 25px;
+            border: none;
+            border-radius: 25px;
+            cursor: pointer;
+            font-size: 1rem;
+            font-weight: 500;
+            transition: all 0.3s ease;
+        }
+
+        .save-btn {
+            background: linear-gradient(45deg, #667eea, #764ba2);
+            color: white;
+            box-shadow: 0 8px 16px rgba(102, 126, 234, 0.3);
+        }
+
+        .save-btn:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 12px 24px rgba(102, 126, 234, 0.4);
+        }
+
+        .cancel-btn {
+            background: #f8f9fa;
+            color: #666;
+            border: 2px solid #e1e5e9;
+        }
+
+        .cancel-btn:hover {
+            background: #e9ecef;
+            transform: translateY(-1px);
+        }
+
+        .loading {
+            text-align: center;
+            color: #667eea;
+            font-size: 1.2rem;
+            margin: 40px 0;
+        }
+
+        .spinner {
+            display: inline-block;
+            width: 30px;
+            height: 30px;
+            border: 3px solid #f3f3f3;
+            border-top: 3px solid #667eea;
+            border-radius: 50%;
+            animation: spin 1s linear infinite;
+            margin-right: 10px;
+        }
+
+        .success-message {
+            position: fixed;
+            top: 20px;
+            right: 20px;
+            background: linear-gradient(45deg, #11998e, #38ef7d);
+            color: white;
+            padding: 15px 25px;
+            border-radius: 10px;
+            box-shadow: 0 10px 25px rgba(17, 153, 142, 0.3);
+            z-index: 1100;
+            opacity: 0;
+            transform: translateX(100%);
+            transition: all 0.3s ease;
+        }
+
+        .success-message.show {
+            opacity: 1;
+            transform: translateX(0);
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>Frame Character Editor</h1>
+        
+        <div class="upload-section">
+            <div style="display: flex; flex-direction: column; gap: 15px; align-items: center;">
+                <div style="width: 100%; max-width: 500px;">
+                    <input type="file" id="jsonFile" class="file-input" accept=".json">
+                    <label for="jsonFile" class="upload-button" style="display: inline-block; margin-bottom: 0;">Choose JSON File</label>
+                </div>
+                <div style="width: 100%; max-width: 500px; position: relative;">
+                    <input type="text" id="jsonPath" class="character-input" 
+                           placeholder="Or enter full path to your JSON file (e.g., /home/user/data.json)" 
+                           style="margin: 0; width: 100%;">
+                </div>
+                <button id="loadJsonBtn" class="upload-button">Load JSON File</button>
+            </div>
+            <p style="margin-top: 15px; color: #666;">Choose a file or enter the full path to start editing</p>
+        </div>
+
+        <button id="downloadBtn" class="download-button" style="display: none;">Download Updated JSON</button>
+
+        <div id="loadingIndicator" class="loading" style="display: none;">
+            <span class="spinner"></span>Loading frames...
+        </div>
+
+        <div id="framesContainer" class="frames-grid"></div>
+    </div>
+
+    <!-- Modal -->
+    <div id="characterModal" class="modal">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h3 class="modal-title">Edit Characters</h3>
+                <span class="close">&times;</span>
+            </div>
+            <div class="modal-body">
+                <img id="modalImage" class="modal-image" src="" alt="Frame">
+                <div class="input-group">
+                    <label for="characterInput" class="input-label">Characters in this frame:</label>
+                    <input type="text" id="characterInput" class="character-input" 
+                           placeholder="Enter character names (e.g., John, Mary, Peter)">
+                </div>
+                <div class="modal-actions">
+                    <button id="cancelBtn" class="cancel-btn">Cancel</button>
+                    <button id="saveBtn" class="save-btn">Save Characters</button>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        let jsonData = [];
+        let currentIndex = -1;
+        let currentJsonPath = '';
+
+        const jsonFile = document.getElementById('jsonFile');
+        const jsonPathInput = document.getElementById('jsonPath');
+        const loadJsonBtn = document.getElementById('loadJsonBtn');
+        const framesContainer = document.getElementById('framesContainer');
+        const loadingIndicator = document.getElementById('loadingIndicator');
+        const downloadBtn = document.getElementById('downloadBtn');
+        const modal = document.getElementById('characterModal');
+        const modalImage = document.getElementById('modalImage');
+        const characterInput = document.getElementById('characterInput');
+        const saveBtn = document.getElementById('saveBtn');
+        const cancelBtn = document.getElementById('cancelBtn');
+        const closeBtn = document.querySelector('.close');
+
+        jsonFile.addEventListener('change', handleFileSelect);
+        loadJsonBtn.addEventListener('click', loadJsonFile);
+        saveBtn.addEventListener('click', saveCharacters);
+        cancelBtn.addEventListener('click', closeModal);
+        closeBtn.addEventListener('click', closeModal);
+        downloadBtn.addEventListener('click', downloadJSON);
+
+        window.addEventListener('click', (e) => {
+            if (e.target === modal) closeModal();
+        });
+
+        function handleFileSelect(event) {
+            const file = event.target.files[0];
+            if (file) {
+                // For file picker, we'll try to get the full path
+                // Note: Browsers don't give us the full path for security reasons
+                // So we'll fill what we can and let user complete it
+                const fileName = file.name;
+                jsonPathInput.value = `/home/jebineinstein/git/TextFrameAligner/temp_dir/The Brides of Dracula 1960_0_5131/${fileName}`;
+                jsonPathInput.focus();
+                jsonPathInput.select();
+            }
+        }
+
+        async function loadJsonFile() {
+            let filePath = jsonPathInput.value.trim();
+            
+            // Clean up the placeholder text if it exists
+            if (filePath.startsWith('Please complete the full path:')) {
+                alert('Please enter the complete full path to your JSON file');
+                return;
+            }
+            
+            if (!filePath) {
+                alert('Please enter a valid file path or choose a file first');
+                return;
+            }
+
+            loadingIndicator.style.display = 'block';
+            
+            try {
+                const response = await fetch('/load-json', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                    },
+                    body: JSON.stringify({file_path: filePath})
+                });
+
+                if (!response.ok) {
+                    const errorData = await response.json();
+                    throw new Error(errorData.detail || `HTTP error! status: ${response.status}`);
+                }
+
+                const result = await response.json();
+                jsonData = result.data;
+                currentJsonPath = filePath;
+                displayFrames();
+                downloadBtn.style.display = 'block';
+            } catch (error) {
+                alert(`Error loading JSON file: ${error.message}`);
+            } finally {
+                loadingIndicator.style.display = 'none';
+            }
+        }
+
+        function displayFrames() {
+            loadingIndicator.style.display = 'block';
+            framesContainer.innerHTML = '';
+
+            setTimeout(() => {
+                jsonData.forEach((item, index) => {
+                    if (item.frame_path && item.frame_path.length > 0) {
+                        const frameCard = createFrameCard(item, index);
+                        framesContainer.appendChild(frameCard);
+                    }
+                });
+                loadingIndicator.style.display = 'none';
+            }, 100);
+        }
+
+        function createFrameCard(item, index) {
+            const card = document.createElement('div');
+            card.className = 'frame-card';
+
+            const img = document.createElement('img');
+            img.className = 'frame-image';
+            img.loading = 'lazy';
+            
+            // Use server URL instead of file URL
+            const imageUrl = item.frame_path[0];
+            
+            img.src = "/image?file_path=" + imageUrl;
+            img.alt = `Frame at ${item.best_time}s`;
+            img.onerror = function() {
+                this.src = 'data:image/svg+xml;base64,PHN2ZyB3aWR0aD0iMzAwIiBoZWlnaHQ9IjIwMCIgdmlld0JveD0iMCAwIDMwMCAyMDAiIGZpbGw9Im5vbmUiIHhtbG5zPSJodHRwOi8vd3d3LnczLm9yZy8yMDAwL3N2ZyI+CjxyZWN0IHdpZHRoPSIzMDAiIGhlaWdodD0iMjAwIiBmaWxsPSIjZjhmOWZhIi8+CjxwYXRoIGQ9Ik0xNTAgNzVMMTI1IDEyNUgxNzVMMTUwIDc1WiIgZmlsbD0iIzY2N2VlYSIvPgo8dGV4dCB4PSIxNTAiIHk9IjE1MCIgdGV4dC1hbmNob3I9Im1pZGRsZSIgZmlsbD0iIzY2NyIgZm9udC1mYW1pbHk9InNhbnMtc2VyaWYiIGZvbnQtc2l6ZT0iMTIiPkltYWdlIG5vdCBmb3VuZDwvdGV4dD4KPC9zdmc+';
+            };
+
+            img.addEventListener('click', () => openModal(index));
+
+            const info = document.createElement('div');
+            info.className = 'frame-info';
+
+            const timeInfo = document.createElement('div');
+            timeInfo.className = 'scene-time';
+            timeInfo.textContent = `Scene: ${item.scene_start?.toFixed(2)}s - ${item.scene_end?.toFixed(2)}s`;
+
+            const charactersDisplay = document.createElement('div');
+            charactersDisplay.className = 'characters-display';
+
+            const label = document.createElement('div');
+            label.className = 'characters-label';
+            label.textContent = 'Characters';
+
+            const charactersText = document.createElement('div');
+            charactersText.className = 'characters-text';
+            charactersText.textContent = item.characters_in_frame || 'Click image to add characters';
+
+            charactersDisplay.appendChild(label);
+            charactersDisplay.appendChild(charactersText);
+
+            info.appendChild(timeInfo);
+            info.appendChild(charactersDisplay);
+
+            card.appendChild(img);
+            card.appendChild(info);
+
+            return card;
+        }
+
+        function openModal(index) {
+            currentIndex = index;
+            const item = jsonData[index];
+            
+            // Use server URL for modal image too
+            const imageUrl = item.frame_path[0];
+                
+            modalImage.src = "/image?file_path=" + imageUrl;
+            modalImage.onerror = function() {
+                this.src = 'data:image/svg+xml;base64,PHN2ZyB3aWR0aD0iNTAwIiBoZWlnaHQ9IjI1MCIgdmlld0JveD0iMCAwIDUwMCAyNTAiIGZpbGw9Im5vbmUiIHhtbG5zPSJodHRwOi8vd3d3LnczLm9yZy8yMDAwL3N2ZyI+CjxyZWN0IHdpZHRoPSI1MDAiIGhlaWdodD0iMjUwIiBmaWxsPSIjZjhmOWZhIi8+CjxwYXRoIGQ9Ik0yNTAgMTAwTDIwMCAxNTBIMzAwTDI1MCAxMDBaIiBmaWxsPSIjNjY3ZWVhIi8+Cjx0ZXh0IHg9IjI1MCIgeT0iMTkwIiB0ZXh0LWFuY2hvcj0ibWlkZGxlIiBmaWxsPSIjNjY3IiBmb250LWZhbWlseT0ic2Fucy1zZXJpZiIgZm9udC1zaXplPSIxNCI+SW1hZ2Ugbm90IGZvdW5kPC90ZXh0Pgo8L3N2Zz4=';
+            };
+            
+            characterInput.value = item.characters_in_frame || '';
+            modal.style.display = 'block';
+            characterInput.focus();
+        }
+
+        function closeModal() {
+            modal.style.display = 'none';
+            currentIndex = -1;
+        }
+
+        async function saveCharacters() {
+            if (currentIndex >= 0) {
+                const characters = characterInput.value.trim();
+                
+                try {
+                    const response = await fetch('/update-characters', {
+                        method: 'POST',
+                        headers: {
+                            'Content-Type': 'application/json',
+                        },
+                        body: JSON.stringify({
+                            index: currentIndex,
+                            characters: characters
+                        })
+                    });
+
+                    if (!response.ok) {
+                        throw new Error(`HTTP error! status: ${response.status}`);
+                    }
+
+                    // Update local data
+                    jsonData[currentIndex].characters_in_frame = characters;
+                    
+                    // Update the display immediately
+                    const frameCards = document.querySelectorAll('.frame-card');
+                    if (frameCards[currentIndex]) {
+                        const charactersText = frameCards[currentIndex].querySelector('.characters-text');
+                        if (charactersText) {
+                            charactersText.textContent = characters || 'Click image to add characters';
+                        }
+                    }
+                    
+                    closeModal();
+                } catch (error) {
+                    alert(`Error saving characters: ${error.message}`);
+                }
+            }
+        }
+
+        function downloadJSON() {
+            const dataStr = JSON.stringify(jsonData, null, 2);
+            const dataBlob = new Blob([dataStr], { type: 'application/json' });
+            const url = URL.createObjectURL(dataBlob);
+            const link = document.createElement('a');
+            link.href = url;
+            link.download = 'updated_frames.json';
+            document.body.appendChild(link);
+            link.click();
+            document.body.removeChild(link);
+            URL.revokeObjectURL(url);
+        }
+
+        // Keyboard shortcuts
+        document.addEventListener('keydown', (e) => {
+            if (modal.style.display === 'block') {
+                if (e.key === 'Enter') {
+                    saveCharacters();
+                } else if (e.key === 'Escape') {
+                    closeModal();
+                }
+            }
+        });
+    </script>
+</body>
+</html>
