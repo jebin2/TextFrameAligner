@@ -783,6 +783,9 @@ class TextFrameAligner:
 		end_from_sec = input_json.get("end_from_sec", -1)
 		skip_segment = input_json.get("skip_segment", [(None, None)])
 		copy_from_split_paths = input_json.get("copy_from_split_paths", None)
+		FYI = input_json.get("FYI", None)
+		if not FYI:
+			FYI = ""
 
 		self.set_cache_dir(video_path)
 
@@ -812,7 +815,7 @@ class TextFrameAligner:
 		# Step 3: Generate captions
 		# captions = self.caption_generation(extract_scenes_json)
 		from caption_generation import MultiTypeCaptionGenerator
-		multi_cap_gen = MultiTypeCaptionGenerator(self.cache_path)
+		multi_cap_gen = MultiTypeCaptionGenerator(self.cache_path, FYI)
 		captions = multi_cap_gen.caption_generation(extract_scenes_json)
 
 		# Step 7: Process text

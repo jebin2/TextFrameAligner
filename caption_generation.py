@@ -11,11 +11,12 @@ if os.path.exists(".env"):
 	load_dotenv()
 
 class MultiTypeCaptionGenerator:
-	def __init__(self, cache_path, num_types=10):
+	def __init__(self, cache_path, num_types=10, FYI=""):
 		self.cache_path = cache_path
 		self.num_types = num_types
 		self.lock = Lock()  # for safely updating temp JSON
 		self.model = None
+		self.FYI = FYI #FYI: This Movie Frame is from the movie called The Brides of dracula 1960
 
 	def _load_moondream2(self):
 		if not self.model:
@@ -76,7 +77,9 @@ class MultiTypeCaptionGenerator:
 					self._load_moondream2()
 					result = self.model.generate(frame_path, prompt)
 				else:
-					result = self.search_in_ui_type(type_id, f"{prompt} Keep your description to exactly 100 words or fewer.", frame_path)
+					new_prompt = f"""{prompt} Also identify all the characters name in this frame. Keep your description to exactly 100 words or fewer.
+{self.FYI}"""
+					result = self.search_in_ui_type(type_id, new_prompt, frame_path)
 
 				print(f"📝 Type {type_id} got result for frame {idx}: {bool(result)}")
 
@@ -246,6 +249,12 @@ class MultiTypeCaptionGenerator:
 			src_obj = source(config=config)
 			result = src_obj.chat(user_prompt=prompt, file_path=file_path)
 			if result and len(result.split(" ")) > 40:
+				if "AI responses may include mistakes" in result:
+					result = result[:result.index("AI responses may include mistakes")]
+
+				if "Sources\nhelp" in result:
+					result = result[:result.index("Sources\nhelp\n")]
+
 				return result
 
 		except Exception as e:
