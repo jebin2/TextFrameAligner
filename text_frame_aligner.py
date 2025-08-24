@@ -815,7 +815,7 @@ class TextFrameAligner:
 		# Step 3: Generate captions
 		# captions = self.caption_generation(extract_scenes_json)
 		from caption_generation import MultiTypeCaptionGenerator
-		multi_cap_gen = MultiTypeCaptionGenerator(self.cache_path, FYI)
+		multi_cap_gen = MultiTypeCaptionGenerator(self.cache_path, FYI=FYI)
 		captions = multi_cap_gen.caption_generation(extract_scenes_json)
 
 		# Step 7: Process text
