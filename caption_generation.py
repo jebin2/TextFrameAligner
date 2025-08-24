@@ -5,23 +5,56 @@ from concurrent.futures import ThreadPoolExecutor
 from threading import Lock
 from custom_logger import logger_config
 from dotenv import load_dotenv
+import traceback
+import torch
+import threading
 import os
 if os.path.exists(".env"):
 	print("Loaded load_dotenv")
 	load_dotenv()
 
 class MultiTypeCaptionGenerator:
-	def __init__(self, cache_path, num_types=10, FYI="", local_only=False):
+	def __init__(self, cache_path, num_types=12, FYI="", local_only=False):
 		self.cache_path = cache_path
 		self.num_types = num_types
 		self.lock = Lock()  # for safely updating temp JSON
+		self.model_lock = Lock()  # NEW: separate lock for model operations
 		self.model = None
 		self.FYI = FYI #FYI: This Movie Frame is from the movie called The Brides of dracula 1960
 		self.local_only = local_only
+		# Thread-local storage for models
+		self._thread_local = threading.local()
+
+	def _get_thread_model(self):
+		"""Get or create a model instance for the current thread"""
+		if not hasattr(self._thread_local, 'model') or self._thread_local.model is None:
+			with self.model_lock:
+				thread_id = threading.current_thread().ident
+				print(f"🔧 Thread {thread_id} initializing model...")
+				try:
+					# Clear CUDA cache for this thread
+					if torch.cuda.is_available():
+						torch.cuda.empty_cache()
+						# Force synchronization
+						torch.cuda.synchronize()
+					
+					# Set environment variables for this thread to avoid meta tensor issues
+					os.environ["PYTORCH_CUDA_ALLOC_CONF"] = "max_split_size_mb:512"
+					os.environ["CUDA_LAUNCH_BLOCKING"] = "1"
+					
+					# Create a new model instance for this thread
+					self._thread_local.model = Moondream2()
+					print(f"✅ Thread {threading.current_thread().ident} model initialized")
+				except Exception as e:
+					print(f"❌ Thread {thread_id} model init failed: {e}")
+					self._thread_local.model = None
+					raise
+		
+		return self._thread_local.model
 
 	def _load_moondream2(self):
-		if not self.model:
-			self.model = Moondream2()
+		"""Thread-safe model loading - now uses thread-local storage"""
+		return self._get_thread_model()
 
 	def _load_temp(self, temp_path):
 		if os.path.exists(temp_path):
@@ -53,7 +86,18 @@ class MultiTypeCaptionGenerator:
 
 	def _worker(self, prompt, extract_scenes_json, temp_path, type_id):
 		processed_count = 0
-		print(f"🚀 Worker {type_id} started")
+		thread_id = threading.current_thread().ident
+		print(f"🚀 Worker {type_id} (Thread {thread_id}) started")
+		
+		# Set CUDA device for this thread if available
+		if torch.cuda.is_available():
+			try:
+				# Use modulo to distribute threads across available GPUs
+				device_id = type_id % torch.cuda.device_count()
+				torch.cuda.set_device(device_id)
+				print(f"📍 Worker {type_id} using GPU {device_id}")
+			except Exception as e:
+				print(f"⚠️ Could not set CUDA device for worker {type_id}: {e}")
 		
 		while True:
 			print(f"🔍 Worker {type_id} looking for next frame...")
@@ -75,8 +119,13 @@ class MultiTypeCaptionGenerator:
 				# Process the caption
 				result = None
 				if type_id % self.num_types == 0 or self.local_only:
-					self._load_moondream2()
-					result = self.model.generate(frame_path, prompt)
+					# Use thread-local model
+					model = self._load_moondream2()
+					if model:
+						result = model.generate(frame_path, prompt)
+					else:
+						print(f"❌ Worker {type_id} - model not available")
+						result = None
 				else:
 					new_prompt = f"""{prompt} Also identify all the characters name in this frame. Keep your description to exactly 100 words or fewer.
 {self.FYI}"""
@@ -107,6 +156,22 @@ class MultiTypeCaptionGenerator:
 						
 			except Exception as e:
 				print(f"💥 Worker {type_id} error on frame {idx}: {e}")
+				
+				# For model loading errors, clear the thread-local model
+				if ("meta tensor" in str(e) or "Cannot copy out" in str(e) or 
+				    "meta is not on the expected device" in str(e) or 
+				    "CUDA" in str(e) or "device" in str(e).lower()):
+					print(f"🔄 Worker {type_id} detected device/model error, clearing thread-local model")
+					if hasattr(self._thread_local, 'model'):
+						try:
+							del self._thread_local.model
+						except:
+							pass
+						self._thread_local.model = None
+					if torch.cuda.is_available():
+						torch.cuda.empty_cache()
+						torch.cuda.synchronize()
+				
 				# Mark as failed and not in progress
 				with self.lock:
 					temp_data = self._load_temp(temp_path)
@@ -114,6 +179,13 @@ class MultiTypeCaptionGenerator:
 					temp_data[idx]["processed"] = False
 					with open(temp_path, "w") as f:
 						json.dump(temp_data, f, indent=4)
+		
+		# Cleanup thread-local model when worker finishes
+		if hasattr(self._thread_local, 'model') and self._thread_local.model is not None:
+			print(f"🧹 Worker {type_id} cleaning up thread-local model")
+			del self._thread_local.model
+			if torch.cuda.is_available():
+				torch.cuda.empty_cache()
 		
 		print(f"🏁 Worker {type_id} finished. Processed {processed_count} frames.")
 
@@ -187,10 +259,16 @@ class MultiTypeCaptionGenerator:
 
 		prompt = "Describe what is happening in this video frame as if you're telling a story. Focus on the main subjects, their actions, the setting, and any important details."
 
-		# Start workers
-		with ThreadPoolExecutor(max_workers=self.num_types) as executor:
+		# Use single worker for local model to avoid memory issues
+		effective_workers = 1 if self.local_only else self.num_types
+		print(f"🔧 Using {effective_workers} workers (local_only: {self.local_only})")
+		if self.local_only:
+			print(f"💾 Memory optimization: Using 1 thread to avoid loading multiple models")
+
+		# Start workers with reduced concurrency for local models
+		with ThreadPoolExecutor(max_workers=effective_workers) as executor:
 			futures = []
-			for type_id in range(self.num_types):
+			for type_id in range(effective_workers):
 				future = executor.submit(self._worker, prompt, extract_scenes_json, temp_path, type_id)
 				futures.append(future)
 			
@@ -217,23 +295,28 @@ class MultiTypeCaptionGenerator:
 			
 		logger_config.info(f"✅ Saved all captions to {cache_dir}")
 		
-		# Optionally clean up temp file
-		# os.remove(temp_path)
-		del self.model
+		# Clean up any remaining models
+		if hasattr(self, 'model') and self.model:
+			del self.model
+			
+		# Final CUDA cleanup
+		if torch.cuda.is_available():
+			torch.cuda.empty_cache()
+		
 		return captions
 
 	def search_in_ui_type(self, type_id, prompt, file_path):
-		from chat_bot_ui_handler import GoogleAISearchChat, AIStudioUIChat, QwenUIChat, PerplexityUIChat, GeminiUIChat, GrokUIChat, MetaUIChat, CopilotUIChat, PallyUIChat
+		from chat_bot_ui_handler import GoogleAISearchChat, AIStudioUIChat, QwenUIChat, PerplexityUIChat, GeminiUIChat, GrokUIChat, MetaUIChat, CopilotUIChat, BingUIChat, MistralUIChat, PallyUIChat
 		from browser_manager.browser_config import BrowserConfig
 		import os
 
-		sources = [GoogleAISearchChat, AIStudioUIChat, QwenUIChat, PerplexityUIChat, GeminiUIChat, GrokUIChat, MetaUIChat, CopilotUIChat, PallyUIChat]
+		sources = [GoogleAISearchChat, AIStudioUIChat, QwenUIChat, PerplexityUIChat, GeminiUIChat, GrokUIChat, MetaUIChat, CopilotUIChat, BingUIChat, MistralUIChat, PallyUIChat]
 		source = sources[type_id % self.num_types-1]
 
 		try:
 			config = BrowserConfig()
-			config.starting_server_port_to_check = [9081, 10081, 11081, 12081, 13081, 14081, 15081, 16081, 17081][type_id % self.num_types-1]
-			config.starting_debug_port_to_check = [10224, 11224, 12224, 13224, 14224, 15224, 16224, 17224, 18224][type_id % self.num_types-1]
+			config.starting_server_port_to_check = [9081, 10081, 11081, 12081, 13081, 14081, 15081, 16081, 17081, 18081, 19081][type_id % self.num_types-1]
+			config.starting_debug_port_to_check = [10224, 11224, 12224, 13224, 14224, 15224, 16224, 17224, 18224, 19224, 20224][type_id % self.num_types-1]
 
 			# Use a different profile for perplexity
 			if source.__name__ == "GrokUIChat" or source.__name__ == "PerplexityUIChat":
@@ -266,7 +349,7 @@ class MultiTypeCaptionGenerator:
 # Usage example and main execution
 if __name__ == "__main__":
 	# Example usage
-	captionGen = MultiTypeCaptionGenerator("temp_dir/cache_dir/3959d9724d997125d77addd3a7bf2738")
+	captionGen = MultiTypeCaptionGenerator("temp_dir/cache_dir/3959d9724d997125d77addd3a7bf2738", local_only=True)
 	
 	try:
 		# Process video-text alignment

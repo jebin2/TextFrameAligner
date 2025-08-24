@@ -2,67 +2,183 @@ from vision_model import VisionModel
 from PIL import Image
 import time
 import torch
+import os
 
 class Moondream2(VisionModel):
-	def load_model(self):
-		from transformers import AutoModelForCausalLM, AutoTokenizer
-		self.model = AutoModelForCausalLM.from_pretrained(
-			"vikhyatk/moondream2",
-			revision="2025-06-21",
-			trust_remote_code=True,
-			device_map={"": "cuda"}  # ...or 'mps', on Apple Silicon
-		)
+    def load_model(self):
+        # Set environment variables to prevent meta device issues
+        os.environ["PYTORCH_CUDA_ALLOC_CONF"] = "max_split_size_mb:512"
+        os.environ["CUDA_LAUNCH_BLOCKING"] = "1"
+        
+        # Clear CUDA cache first
+        if torch.cuda.is_available():
+            torch.cuda.empty_cache()
+            torch.cuda.synchronize()
+        
+        # Try multiple loading strategies
+        strategies = [
+            self._load_strategy_cpu_first,
+            self._load_strategy_explicit_device,
+            self._load_strategy_cpu_only
+        ]
+        
+        for i, strategy in enumerate(strategies):
+            try:
+                print(f"🔧 Attempting loading strategy {i+1}/{len(strategies)}")
+                self.model = strategy()
+                
+                # Verify model is properly loaded and not on meta device
+                self._verify_model_device()
+                print(f"✅ Strategy {i+1} successful!")
+                return
+                
+            except Exception as e:
+                print(f"❌ Strategy {i+1} failed: {e}")
+                if hasattr(self, 'model'):
+                    try:
+                        del self.model
+                    except:
+                        pass
+                if torch.cuda.is_available():
+                    torch.cuda.empty_cache()
+                    torch.cuda.synchronize()
+                
+                if i == len(strategies) - 1:  # Last strategy
+                    raise Exception(f"All loading strategies failed. Last error: {e}")
+    
+    def _verify_model_device(self):
+        """Verify that model parameters are not on meta device"""
+        if not hasattr(self, 'model') or self.model is None:
+            raise Exception("Model is None")
+        
+        # Check for meta device parameters
+        meta_params = []
+        for name, param in self.model.named_parameters():
+            if param.device.type == 'meta':
+                meta_params.append(name)
+        
+        if meta_params:
+            raise Exception(f"Found {len(meta_params)} parameters still on meta device: {meta_params[:5]}...")
+        
+        print(f"✅ Model verification passed - all parameters on proper device")
+    
+    def _load_strategy_cpu_first(self):
+        """Strategy 1: Load on CPU first, then move to GPU"""
+        from transformers import AutoModelForCausalLM
+        
+        print("🔧 Loading on CPU first...")
+        model = AutoModelForCausalLM.from_pretrained(
+            "vikhyatk/moondream2",
+            revision="2025-06-21",
+            trust_remote_code=True,
+            device_map=None,  # Force CPU
+            torch_dtype=torch.float32,  # CPU compatible
+            low_cpu_mem_usage=True
+        )
+        
+        # Move to GPU if available
+        if torch.cuda.is_available():
+            print("🔧 Moving to GPU...")
+            device = torch.device(f"cuda:{torch.cuda.current_device()}")
+            model = model.to(device)
+            model = model.half()  # Convert to fp16 after moving
+            print("✅ Successfully moved to GPU")
+        
+        return model
+    
+    def _load_strategy_explicit_device(self):
+        """Strategy 2: Load with explicit device mapping"""
+        from transformers import AutoModelForCausalLM
+        
+        if torch.cuda.is_available():
+            device_map = f"cuda:{torch.cuda.current_device()}"
+            dtype = torch.float16
+        else:
+            device_map = "cpu"
+            dtype = torch.float32
+        
+        print(f"🔧 Loading with explicit device_map: {device_map}")
+        model = AutoModelForCausalLM.from_pretrained(
+            "vikhyatk/moondream2",
+            revision="2025-06-21",
+            trust_remote_code=True,
+            device_map=device_map,
+            torch_dtype=dtype,
+            low_cpu_mem_usage=True
+        )
+        
+        return model
+    
+    def _load_strategy_cpu_only(self):
+        """Strategy 3: CPU-only fallback"""
+        from transformers import AutoModelForCausalLM
+        
+        print("🔧 Loading CPU-only model...")
+        model = AutoModelForCausalLM.from_pretrained(
+            "vikhyatk/moondream2",
+            revision="2025-06-21",
+            trust_remote_code=True,
+            device_map="cpu",
+            torch_dtype=torch.float32,
+            low_cpu_mem_usage=True
+        )
+        
+        return model
 
-	def generate(self, image: Image.Image, text: str = "") -> str:
-		with torch.inference_mode():
-			if isinstance(image, str):
-				with Image.open(image) as img:
-					return self.model.caption(img, length="normal")["caption"]
-			return self.model.caption(image, length="normal")["caption"]
+    def generate(self, image: Image.Image, text: str = "") -> str:
+        try:
+            with torch.inference_mode():
+                if isinstance(image, str):
+                    with Image.open(image) as img:
+                        result = self.model.caption(img, length="normal")
+                        return result["caption"] if isinstance(result, dict) else str(result)
+                
+                result = self.model.caption(image, length="normal")
+                return result["caption"] if isinstance(result, dict) else str(result)
+                
+        except RuntimeError as e:
+            if "meta" in str(e).lower() or "device" in str(e).lower():
+                print(f"🔄 Device error in generate, attempting model reload: {e}")
+                try:
+                    self.load_model()  # Reload model
+                    return self.generate(image, text)  # Retry once
+                except Exception as e2:
+                    return f"Error after model reload: {str(e2)}"
+            else:
+                return f"Error generating caption: {str(e)}"
+        except Exception as e:
+            return f"Error generating caption: {str(e)}"
 
-	def query(self, image: Image.Image, text: str = "") -> str:
-		with torch.inference_mode():
-			return self.model.query(image, text)["answer"]
+    def query(self, image: Image.Image, text: str = "") -> str:
+        try:
+            with torch.inference_mode():
+                result = self.model.query(image, text)
+                return result["answer"] if isinstance(result, dict) else str(result)
+        except Exception as e:
+            return f"Error in query: {str(e)}"
 
-	def point(self, image: Image.Image, text: str = "person") -> str:
-		with torch.inference_mode():
-			return self.model.point(image, text)["points"]
+    def point(self, image: Image.Image, text: str = "person") -> str:
+        try:
+            with torch.inference_mode():
+                result = self.model.point(image, text)
+                return result["points"] if isinstance(result, dict) else str(result)
+        except Exception as e:
+            return f"Error in point detection: {str(e)}"
 
-	def detect(self, image: Image.Image, text: str = "face") -> str:
-		with torch.inference_mode():
-			return self.model.detect(image, text)["objects"]
+    def detect(self, image: Image.Image, text: str = "face") -> str:
+        try:
+            with torch.inference_mode():
+                result = self.model.detect(image, text)
+                return result["objects"] if isinstance(result, dict) else str(result)
+        except Exception as e:
+            return f"Error in detection: {str(e)}"
 
 if __name__ == "__main__":
-	model = Moondream2()
-	image = Image.open("/home/jebineinstein/git/FaceTagger/all_frames_dir/frame_20.0_00200.jpg")
-	text = "Describe what is happening in this video frame as if you're telling a story. Focus on the main subjects, their actions, the setting, and any important details that would help someone understand the scene's context."
-	start_time = time.time()
-	response = model.detect(image)
-	end_time = time.time()
-	print("Moondream2:", response)
-	print(f"⏱ Total time taken: {end_time - start_time:.2f} seconds")
-
-# Captioning
-# print("Short caption:")
-# print(model.caption(image, length="short")["caption"])
-
-# print("\nNormal caption:")
-# for t in model.caption(image, length="normal", stream=True)["caption"]:
-# 	# Streaming generation example, supported for caption() and detect()
-# 	print(t, end="", flush=True)
-
-# print(model.caption(image, length="normal")["caption"])
-
-# Visual Querying
-# print("\nVisual query: 'Describe what is happening in this video frame as if you're telling a story. Focus on the main subjects, their actions, the setting, and any important details that would help someone understand the scene's context.'")
-# print(model.query(image, "Describe what is happening in this video frame as if you're telling a story. Focus on the main subjects, their actions, the setting, and any important details that would help someone understand the scene's context.")["answer"])
-
-# # Object Detection
-# print("\nObject detection: 'face'")
-# objects = model.detect(image, "face")["objects"]
-# print(f"Found {len(objects)} face(s)")
-
-# # Pointing
-# print("\nPointing: 'person'")
-# points = model.point(image, "person")["points"]
-# print(f"Found {len(points)} person(s)")
+    model = Moondream2()
+    image = Image.open("/home/jebineinstein/git/FaceTagger/all_frames_dir/frame_20.0_00200.jpg")
+    text = "Describe what is happening in this video frame as if you're telling a story. Focus on the main subjects, their actions, the setting, and any important details that would help someone understand the scene's context."
+    start_time = time.time()
+    response = model.detect(image)
+    end_time = time.time()
+    print("Moondream2:", response)
+    print(f"⏱ Total time taken: {end_time - start_time:.2f} seconds")
