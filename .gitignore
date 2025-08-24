@@ -219,3 +219,14 @@ tempOutput/
 reuse/
 chat_bot_ui_handler_logs/
 yolov8x6_animeface.pt
+
+aistudio_ui_handler/
+copilot_ui_chat/
+gemini_ui_chat/
+grok_ui_chat/
+pally_search_caption/
+perplexity_ui_chat/
+qwen_ui_chat/
+text_frame_aligner_aistudio_ui_handler/
+search_google_ai_mode/
+meta_ui_chat/
