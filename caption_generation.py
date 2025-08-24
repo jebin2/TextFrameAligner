@@ -11,12 +11,13 @@ if os.path.exists(".env"):
 	load_dotenv()
 
 class MultiTypeCaptionGenerator:
-	def __init__(self, cache_path, num_types=10, FYI=""):
+	def __init__(self, cache_path, num_types=10, FYI="", local_only=False):
 		self.cache_path = cache_path
 		self.num_types = num_types
 		self.lock = Lock()  # for safely updating temp JSON
 		self.model = None
 		self.FYI = FYI #FYI: This Movie Frame is from the movie called The Brides of dracula 1960
+		self.local_only = local_only
 
 	def _load_moondream2(self):
 		if not self.model:
@@ -73,7 +74,7 @@ class MultiTypeCaptionGenerator:
 			try:
 				# Process the caption
 				result = None
-				if type_id % self.num_types == 0:
+				if type_id % self.num_types == 0 or self.local_only:
 					self._load_moondream2()
 					result = self.model.generate(frame_path, prompt)
 				else:

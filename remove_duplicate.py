@@ -104,12 +104,13 @@ if __name__ == "__main__":
 	dino = FaceDINO(threshold=0.85)
 
 	# cap = cv2.VideoCapture("/home/jebineinstein/git/CaptionCreator/reuse/movie_review_The Reader 2008/The Reader 2008_0_7438.mp4")
+	path = "/home/jebineinstein/git/CaptionCreator/reuse/comic_review_Clementine Chapter 02/split_0007"
 	frame_id = 0
-	for file in sorted(os.listdir("temp2")):
-		dup, sim = dino.is_duplicate(f"temp2/{file}")
+	for file in sorted([file for file in os.listdir(path) if "(" in file]):
+		dup, sim = dino.is_duplicate(f"{path}/{file}")
 		if dup:
 			frame_id += 1
-			print(f"Frame {frame_id}: duplicate={dup}, sim={sim:.3f}")
+			print(f"Frame {frame_id}: duplicate={dup}, sim={sim:.3f} {file}")
 		# 	cv2.imwrite(f"temp2/frame_{frame_id}.jpg", frame)
 			# os.remove(f"temp2/{file}")
 	# cap.release()

@@ -24,16 +24,20 @@ class Moondream2(VisionModel):
 		with torch.inference_mode():
 			return self.model.query(image, text)["answer"]
 
-	def point(self, image: Image.Image, text: str = "") -> str:
+	def point(self, image: Image.Image, text: str = "person") -> str:
 		with torch.inference_mode():
 			return self.model.point(image, text)["points"]
 
+	def detect(self, image: Image.Image, text: str = "face") -> str:
+		with torch.inference_mode():
+			return self.model.detect(image, text)["objects"]
+
 if __name__ == "__main__":
 	model = Moondream2()
-	image = Image.open("temp_dir/frames/scene_0036_at_155.45s.jpg")
+	image = Image.open("/home/jebineinstein/git/FaceTagger/all_frames_dir/frame_20.0_00200.jpg")
 	text = "Describe what is happening in this video frame as if you're telling a story. Focus on the main subjects, their actions, the setting, and any important details that would help someone understand the scene's context."
 	start_time = time.time()
-	response = model.generate(image, text)
+	response = model.detect(image)
 	end_time = time.time()
 	print("Moondream2:", response)
 	print(f"⏱ Total time taken: {end_time - start_time:.2f} seconds")

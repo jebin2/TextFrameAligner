@@ -590,7 +590,7 @@ class TextFrameAligner:
 			json.dump(sentences, f, indent=4)
 		return sentences
 
-	def match_scenes_online(self, captions, sentences, extract_scenes_json):
+	def match_scenes_online(self, captions, sentences, extract_scenes_json, allow_dup):
 		"""Optimized scene extraction"""
 		match_scene = None
 		cache_dir = f"{self.cache_path}/{re.sub(r'[^a-zA-Z]', '', sentences[0][:10])}_match_scenes_online.json"
@@ -605,8 +605,12 @@ class TextFrameAligner:
 			if not match_scene:
 				text = f"""Scene Captions:: {captions}
 		Recap Sentences:: {sentences}"""
-				with open("scene_matching_system_prompt.md", 'r') as file:
-					system_prompt = file.read()
+				if allow_dup:
+					with open("scene_matching_system_prompt_dup.md", 'r') as file:
+						system_prompt = file.read()
+				else:
+					with open("scene_matching_system_prompt.md", 'r') as file:
+						system_prompt = file.read()
 
 				# geminiWrapper = GeminiWrapper(system_instruction=system_prompt, model_name="gemini-2.0-flash")
 				# model_responses = geminiWrapper.send_message(text, schema=genai.types.Schema(
@@ -783,6 +787,8 @@ class TextFrameAligner:
 		end_from_sec = input_json.get("end_from_sec", -1)
 		skip_segment = input_json.get("skip_segment", [(None, None)])
 		copy_from_split_paths = input_json.get("copy_from_split_paths", None)
+		allow_dup = input_json.get("allow_dup", False)
+		local_only = input_json.get("local_only", False)
 		FYI = input_json.get("FYI", None)
 		if not FYI:
 			FYI = ""
@@ -815,7 +821,7 @@ class TextFrameAligner:
 		# Step 3: Generate captions
 		# captions = self.caption_generation(extract_scenes_json)
 		from caption_generation import MultiTypeCaptionGenerator
-		multi_cap_gen = MultiTypeCaptionGenerator(self.cache_path, FYI=FYI)
+		multi_cap_gen = MultiTypeCaptionGenerator(self.cache_path, FYI=FYI, local_only=local_only)
 		captions = multi_cap_gen.caption_generation(extract_scenes_json)
 
 		# Step 7: Process text
@@ -832,7 +838,7 @@ class TextFrameAligner:
 
 		while (result is None or len(result) == 0) and try_times > 0:
 			try:
-				result = self.match_scenes_online(captions, sentences, extract_scenes_json)
+				result = self.match_scenes_online(captions, sentences, extract_scenes_json, allow_dup)
 				# result = self.match_scenes_offline(captions, sentences, timestamps, frame_paths, frame_numbers, timestamp_data)
 			except Exception as e:
 				logger_config.error(f'{str(e)} {traceback.format_exc()}')
