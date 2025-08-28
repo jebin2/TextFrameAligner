@@ -5,12 +5,13 @@ from tqdm import tqdm
 from custom_logger import logger_config
 
 def run_transnetv2(video_path: str, frame_timestamps=None, start_from_sec=-1, end_from_sec=-1, skip_segment = [(None, None)]) -> list:
-	transnetv2_dir = "/home/jebineinstein/git/TransNetV2"
+	transnetv2_dir = f'{os.getenv("PARENT_BASE_PATH")}/TransNetV2'
 	video_path = os.path.abspath(video_path)
 	scene_txt_path = f"{video_path}.scenes.txt"
 
 	# Step 1: Run TransNetV2 using subprocess inside venv
-	activate_cmd = "source venv/bin/activate && python inference/transnetv2.py"
+	python_path = os.path.expanduser("~/.pyenv/versions/TransNetV2_env/bin/python")
+	activate_cmd = f"{python_path} inference/transnetv2.py"
 	cmd = f'{activate_cmd} "{video_path}"'
 	subprocess.run(cmd, shell=True, check=True, cwd=transnetv2_dir, executable="/bin/bash")
 

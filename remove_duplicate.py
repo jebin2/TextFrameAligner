@@ -103,8 +103,7 @@ if __name__ == "__main__":
 
 	dino = FaceDINO(threshold=0.85)
 
-	# cap = cv2.VideoCapture("/home/jebineinstein/git/CaptionCreator/reuse/movie_review_The Reader 2008/The Reader 2008_0_7438.mp4")
-	path = "/home/jebineinstein/git/CaptionCreator/reuse/comic_review_Clementine Chapter 02/split_0007"
+	path = f'{os.getenv("PARENT_BASE_PATH")}/CaptionCreator/reuse/comic_review_Clementine Chapter 02/split_0007'
 	frame_id = 0
 	for file in sorted([file for file in os.listdir(path) if "(" in file]):
 		dup, sim = dino.is_duplicate(f"{path}/{file}")

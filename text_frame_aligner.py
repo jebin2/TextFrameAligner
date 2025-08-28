@@ -29,6 +29,9 @@ from extract_scenes import extract_scenes as extract_scenes_method, resize_to_48
 import traceback
 from aistudio_ui_handler import run_gemini_generation
 from tqdm import tqdm
+from dotenv import load_dotenv
+if os.path.exists(".env"):
+	load_dotenv()
 
 TEMP_DIR = os.path.abspath("temp_dir")
 

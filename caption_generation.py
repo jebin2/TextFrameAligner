@@ -4,13 +4,12 @@ from moondream2 import Moondream2
 from concurrent.futures import ThreadPoolExecutor
 from threading import Lock
 from custom_logger import logger_config
-from dotenv import load_dotenv
 import traceback
 import torch
 import threading
 import os
+from dotenv import load_dotenv
 if os.path.exists(".env"):
-	print("Loaded load_dotenv")
 	load_dotenv()
 
 class MultiTypeCaptionGenerator:
@@ -327,7 +326,7 @@ class MultiTypeCaptionGenerator:
 			if source.__name__ == "MetaUIChat" or source.__name__ == "AIStudioUIChat":
 				additional_flags = []
 				additional_flags.append(f'-v {os.getcwd()}/{os.getenv("TEMP_OUTPUT", "chat_bot_ui_handler_logs")}:/home/neko/Downloads')
-				additional_flags.append(f'-v /home/jebineinstein/git/browser_manager/policies.json:/etc/opt/chrome/policies/managed/policies.json')
+				additional_flags.append(f'-v {os.getenv("PARENT_BASE_PATH")}/browser_manager/policies.json:/etc/opt/chrome/policies/managed/policies.json')
 				config.additionl_docker_flag = ' '.join(additional_flags)
 
 			src_obj = source(config=config)
