@@ -230,3 +230,5 @@ qwen_ui_chat/
 text_frame_aligner_aistudio_ui_handler/
 search_google_ai_mode/
 meta_ui_chat/
+bing_ui_chat/
+mistral_ui_chat/
