@@ -830,9 +830,9 @@ class TextFrameAligner:
 			self.cache_path,
 			FYI,
 			str(local_only)  # Convert boolean to string
-		], check=True)
+		], check=True, preexec_fn=os.setsid)
 		with open(os.path.join(self.cache_path, "caption_generation.json"), 'r') as f:
-			caption = json.load(f)
+			captions = json.load(f)
 		manage_gpu(action="clear_cache")
 
 		# Step 7: Process text

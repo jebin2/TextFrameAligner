@@ -99,9 +99,10 @@ class MultiTypeCaptionGenerator:
 	def _worker(self, prompt, extract_scenes_json, temp_path, type_id):
 		processed_count = 0
 		thread_id = threading.current_thread().ident
-		print(f"🚀 Worker {type_id} (Thread {thread_id}) started")
+		handler_key = type_id if self.local_only else (type_id % self.num_types)
+		print(f"🚀 Worker {type_id} (Handler {handler_key}) started on Thread {thread_id}")
 		
-		if torch.cuda.is_available():
+		if torch.cuda.is_available() and not self.local_only:
 			try:
 				device_id = type_id % torch.cuda.device_count()
 				torch.cuda.set_device(device_id)
@@ -110,6 +111,30 @@ class MultiTypeCaptionGenerator:
 				print(f"⚠️ Could not set CUDA device for worker {type_id}: {e}")
 		
 		while True:
+			# --- NEW: Proactively check if the handler is skipped and pause the worker ---
+			if not self.local_only: # This logic only applies to non-local handlers
+				with self.handler_lock:
+					status = self.handler_statuses[handler_key]
+					if status["is_skipped"]:
+						remaining_skip_time = status["skip_until"] - time.time()
+						if remaining_skip_time > 0:
+							# Release lock before sleeping to not block other threads
+							self.handler_lock.release()
+							
+							logger_config.warning(
+								f"🟡 Worker {type_id} (Handler {handler_key}) is paused. "
+								f"Handler is skipped for another {remaining_skip_time:.1f} seconds."
+							)
+							time.sleep(remaining_skip_time + 1) # Sleep until the skip duration is over + 1s buffer
+							
+							# Re-enter the loop to check for tasks again
+							continue 
+						else:
+							# If time is up, reactivate the handler
+							logger_config.info(f"Reactivating handler {handler_key} after skip period.")
+							status["is_skipped"] = False
+							status["failure_count"] = 0
+				
 			print(f"🔍 Worker {type_id} looking for next frame...")
 			result_tuple = self._get_next_index(temp_path)
 			if result_tuple[0] is None:
@@ -136,7 +161,7 @@ class MultiTypeCaptionGenerator:
 						result = None
 				else:
 					new_prompt = f"""{prompt} Also identify all the characters name in this frame. Keep your description to exactly 100 words or fewer.
-{self.FYI}"""
+	{self.FYI}"""
 					result = self.search_in_ui_type(type_id, new_prompt, frame_path)
 
 				print(f"📝 Type {type_id} got result for frame {idx}: {result}")
@@ -152,6 +177,8 @@ class MultiTypeCaptionGenerator:
 						processed_count += 1
 						print(f"✅ Type {type_id} completed frame {idx+1} (Total: {processed_count})")
 					else:
+						# This case should now primarily be triggered by a genuine processing failure
+						# or if search_in_ui_type returns None after an exception.
 						temp_data[idx]["processed"] = False
 						print(f"❌ Type {type_id} failed frame {idx+1}")
 					
@@ -159,16 +186,16 @@ class MultiTypeCaptionGenerator:
 					with open(temp_path, "w") as f:
 						json.dump(temp_data, f, indent=4)
 			
-			# --- MODIFIED: Handle handler skipping ---
 			except HandlerSkippedException:
+				# This block is now a secondary safeguard. The proactive check above should prevent it.
 				print(f"🟡 Worker {type_id}'s handler is currently skipped. Releasing frame {idx} for another worker.")
 				with self.lock:
 					temp_data = self._load_temp(temp_path)
 					temp_data[idx]["in_progress"] = False # Release the frame
 					with open(temp_path, "w") as f:
 						json.dump(temp_data, f, indent=4)
-				time.sleep(5) # Brief pause to allow other workers to pick up
-			# -------------------------------------------
+				time.sleep(5) # Brief pause to prevent rapid re-grabbing if the proactive check fails
+			
 			except Exception as e:
 				print(f"💥 Worker {type_id} error on frame {idx}: {e}")
 				
