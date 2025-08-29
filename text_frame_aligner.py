@@ -130,9 +130,7 @@ class TextFrameAligner:
 		if self.embedder:
 			logger_config.info("Unloading SentenceTransformer model")
 			del self.embedder
-			self.embedder = None
-			if torch.cuda.is_available():
-				torch.cuda.empty_cache()
+			manage_gpu("clear_cache")
 
 	def load_blip_on_demand(self):
 		"""Load BLIP model for image captioning"""
@@ -157,8 +155,7 @@ class TextFrameAligner:
 			del self.blip_model, self.processor
 			self.blip_model = None
 			self.processor = None
-			if torch.cuda.is_available():
-				torch.cuda.empty_cache()
+			manage_gpu("clear_cache")
 
 	@torch.inference_mode()
 	def compute_frame_vision_embeddings(self, frame_paths: List[str]) -> torch.Tensor:
@@ -222,8 +219,7 @@ class TextFrameAligner:
 
 			# Clean up GPU memory
 			del inputs, image_features
-			if torch.cuda.is_available():
-				torch.cuda.empty_cache()
+			manage_gpu("clear_cache")
 
 		# Combine all embeddings
 		frame_vision_embeddings = torch.cat(all_embeddings, dim=0)
@@ -820,12 +816,15 @@ class TextFrameAligner:
 							}
 						)
 				del dino
+				manage_gpu(action="clear_cache")
 
 		# Step 3: Generate captions
 		# captions = self.caption_generation(extract_scenes_json)
 		from caption_generation import MultiTypeCaptionGenerator
 		multi_cap_gen = MultiTypeCaptionGenerator(self.cache_path, FYI=FYI, local_only=local_only)
 		captions = multi_cap_gen.caption_generation(extract_scenes_json)
+		del multi_cap_gen
+		manage_gpu(action="clear_cache")
 
 		# Step 7: Process text
 		sentences = self.split_recap_sentences(recap_text)
@@ -904,8 +903,7 @@ class TextFrameAligner:
 			self.embedder = None
 		
 		# Clear GPU memory
-		if torch.cuda.is_available():
-			torch.cuda.empty_cache()
+		manage_gpu("clear_cache")
 		
 		# Force garbage collection
 		gc.collect()
@@ -951,7 +949,7 @@ class TextFrameAligner:
 				print("Torch not available; skipped GPU cleanup.")
 
 			print("Cleanup completed successfully.")
-
+			manage_gpu(action="clear_cache")
 		except Exception as e:
 			print(f"Error during cleanup: {e}")
 
@@ -963,6 +961,58 @@ class TextFrameAligner:
 
 	def __del__(self):
 		self.cleanup()
+
+def manage_gpu(size_gb: float = 0, gpu_index: int = 0, action: str = "check"):
+    """
+    Manage GPU memory:
+      - check       → just prints memory + process table
+      - clear_cache → clears PyTorch cache
+      - kill        → kills all GPU processes
+    """
+    try:
+        import pynvml,signal, gc
+        pynvml.nvmlInit()
+        handle = pynvml.nvmlDeviceGetHandleByIndex(gpu_index)
+        info = pynvml.nvmlDeviceGetMemoryInfo(handle)
+
+        free_gb = info.free / 1024**3
+        total_gb = info.total / 1024**3
+
+        print(f"\nGPU {gpu_index}: Free {free_gb:.2f} GB / Total {total_gb:.2f} GB")
+
+        # Show processes
+        processes = pynvml.nvmlDeviceGetComputeRunningProcesses(handle)
+        print("\nActive GPU Processes:")
+        print(f"{'PID':<8} {'Process Name':<40} {'Used (GB)':<10}")
+        print("-" * 60)
+        for p in processes:
+            used_gb = p.usedGpuMemory / 1024**3
+            proc_name = pynvml.nvmlSystemGetProcessName(p.pid).decode(errors="ignore")
+            print(f"{p.pid:<8} {proc_name:<40} {used_gb:.2f}")
+
+        if action == "clear_cache":
+            try:
+                import torch
+                torch.cuda.empty_cache()
+                torch.cuda.synchronize()
+                time.sleep(1)
+                print("\n🧹 Cleared PyTorch CUDA cache")
+            except ImportError:
+                print("\n⚠️ PyTorch not installed, cannot clear cache.")
+
+        elif action == "kill":
+            for p in processes:
+                proc_name = pynvml.nvmlSystemGetProcessName(p.pid).decode(errors="ignore")
+                try:
+                    os.kill(p.pid, signal.SIGKILL)
+                    print(f"❌ Killed {p.pid} ({proc_name})")
+                except Exception as e:
+                    print(f"⚠️ Could not kill {p.pid}: {e}")
+            manage_gpu(action="clear_cache")
+        gc.collect()
+        gc.collect()
+        return free_gb > size_gb
+    except: return False
 
 # Usage example and main execution
 if __name__ == "__main__":
