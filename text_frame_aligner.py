@@ -29,6 +29,7 @@ from extract_scenes import extract_scenes as extract_scenes_method, resize_to_48
 import traceback
 from aistudio_ui_handler import run_gemini_generation
 from tqdm import tqdm
+import subprocess, sys
 from dotenv import load_dotenv
 if os.path.exists(".env"):
 	load_dotenv()
@@ -816,14 +817,22 @@ class TextFrameAligner:
 							}
 						)
 				del dino
-				manage_gpu(action="clear_cache")
+
+				with open(os.path.join(self.cache_path, "extract_scenes.json"), "w") as f:
+					json.dump(extract_scenes_json, f, indent=4)
+		manage_gpu(action="clear_cache")
 
 		# Step 3: Generate captions
-		# captions = self.caption_generation(extract_scenes_json)
-		from caption_generation import MultiTypeCaptionGenerator
-		multi_cap_gen = MultiTypeCaptionGenerator(self.cache_path, FYI=FYI, local_only=local_only)
-		captions = multi_cap_gen.caption_generation(extract_scenes_json)
-		del multi_cap_gen
+		subprocess.run([
+			sys.executable,
+			"caption_generation.py",
+			f"{self.cache_path}/extract_scenes.json",
+			self.cache_path,
+			FYI,
+			str(local_only)  # Convert boolean to string
+		], check=True)
+		with open(os.path.join(self.cache_path, "caption_generation.json"), 'r') as f:
+			caption = json.load(f)
 		manage_gpu(action="clear_cache")
 
 		# Step 7: Process text

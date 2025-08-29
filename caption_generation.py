@@ -9,6 +9,7 @@ import torch
 import threading
 import time # Import time for skip logic
 from dotenv import load_dotenv
+import subprocess, sys
 
 if os.path.exists(".env"):
 	load_dotenv()
@@ -376,18 +377,25 @@ class MultiTypeCaptionGenerator:
 
 # Usage example and main execution
 if __name__ == "__main__":
-	# Example usage
-	captionGen = MultiTypeCaptionGenerator("temp_dir/cache_dir/3959d9724d997125d77addd3a7bf2738", local_only=True)
-	
-	try:
-		# Process video-text alignment
-		cache_dir = f"temp_dir/cache_dir/3959d9724d997125d77addd3a7bf2738/extract_scenes.json"
+    print(sys.argv)
+    extract_scenes_path = sys.argv[1]
+    cache_path = sys.argv[2]
+    
+    # Set default values for FYI and local_only
+    FYI = ""
+    if len(sys.argv) > 3:
+        FYI = sys.argv[3]
 
-		with open(cache_dir, "r") as f:
-			data = json.load(f)
+    local_only = False
+    if len(sys.argv) > 4:
+        # Convert the string argument to a boolean
+        local_only = sys.argv[4].lower() in ('true', '1', 't')
 
-		results = captionGen.caption_generation(data)
-		
-	except Exception as e:
-		logger_config.error(f"Processing failed: {e}")
-		raise
+    # Example usage
+    captionGen = MultiTypeCaptionGenerator(cache_path=cache_path, FYI=FYI, local_only=local_only)
+
+    with open(extract_scenes_path, "r") as f:
+        data = json.load(f)
+
+    results = captionGen.caption_generation(data)
+    print(results)
