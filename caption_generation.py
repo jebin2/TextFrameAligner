@@ -311,9 +311,10 @@ class MultiTypeCaptionGenerator:
 		from browser_manager.browser_config import BrowserConfig
 		import os
 		
-		handler_key = type_id % self.num_types
+		# Fix: Use consistent handler indexing
+		handler_key = (type_id - 1) % self.num_types  # Map type_id 1-12 to handler 0-11
 		
-		# --- NEW: Check handler status before proceeding ---
+		# --- Check handler status before proceeding ---
 		with self.handler_lock:
 			status = self.handler_statuses[handler_key]
 			if status["is_skipped"] and time.time() < status["skip_until"]:
@@ -324,15 +325,14 @@ class MultiTypeCaptionGenerator:
 				logger_config.info(f"Reactivating handler {handler_key} after skip period.")
 				status["is_skipped"] = False
 				status["failure_count"] = 0
-		# ----------------------------------------------------
 
 		sources = [GoogleAISearchChat, AIStudioUIChat, QwenUIChat, PerplexityUIChat, GeminiUIChat, GrokUIChat, MetaUIChat, CopilotUIChat, BingUIChat, MistralUIChat, PallyUIChat]
-		source = sources[handler_key-1]
+		source = sources[handler_key]  # Remove the -1 since handler_key is already adjusted
 
 		try:
 			config = BrowserConfig()
-			config.starting_server_port_to_check = [9081, 10081, 11081, 12081, 13081, 14081, 15081, 16081, 17081, 18081, 19081][handler_key-1]
-			config.starting_debug_port_to_check = [10224, 11224, 12224, 13224, 14224, 15224, 16224, 17224, 18224, 19224, 20224][handler_key-1]
+			config.starting_server_port_to_check = [9081, 10081, 11081, 12081, 13081, 14081, 15081, 16081, 17081, 18081, 19081][handler_key]
+			config.starting_debug_port_to_check = [10224, 11224, 12224, 13224, 14224, 15224, 16224, 17224, 18224, 19224, 20224][handler_key]
 
 			if source.__name__ == "GrokUIChat" or source.__name__ == "PerplexityUIChat":
 				config.user_data_dir = os.getenv("PROFILE_PATH_1")
@@ -347,22 +347,23 @@ class MultiTypeCaptionGenerator:
 
 			src_obj = source(config=config)
 			result = src_obj.chat(user_prompt=prompt, file_path=file_path)
+	
+			if not result or len(result.split(" ")) <= 40:
+				raise ValueError(f"Handler {handler_key} returned an invalid or empty result.")
 
-			if result and len(result.split(" ")) > 40:
-				if "AI responses may include mistakes" in result:
-					result = result[:result.index("AI responses may include mistakes")]
-				if "Sources\nhelp" in result:
-					result = result[:result.index("Sources\nhelp\n")]
+			if "AI responses may include mistakes" in result:
+				result = result[:result.index("AI responses may include mistakes")]
+			if "Sources\nhelp" in result:
+				result = result[:result.index("Sources\nhelp\n")]
 
-				# --- NEW: Reset failure count on success ---
-				with self.handler_lock:
-					self.handler_statuses[handler_key]["failure_count"] = 0
-				# ---------------------------------------------
-				return result
+			# Reset failure count on success
+			with self.handler_lock:
+				self.handler_statuses[handler_key]["failure_count"] = 0
+			return result
 
 		except Exception as e:
 			logger_config.error(f"Type {type_id} (Handler {handler_key}) failed processing: {e}")
-			# --- NEW: Penalize the handler on failure ---
+			# Penalize the handler on failure
 			with self.handler_lock:
 				status = self.handler_statuses[handler_key]
 				status["failure_count"] += 1
@@ -371,31 +372,33 @@ class MultiTypeCaptionGenerator:
 					status["is_skipped"] = True
 					status["skip_until"] = time.time() + self.skip_duration
 					logger_config.critical(f"Handler {handler_key} failed {status['failure_count']} times. Skipping for {self.skip_duration} seconds.")
-			# --------------------------------------------
+			
+			# Re-raise the exception so the worker can handle it appropriately
+			raise
 
 		return None
 
 # Usage example and main execution
 if __name__ == "__main__":
-    print(sys.argv)
-    extract_scenes_path = sys.argv[1]
-    cache_path = sys.argv[2]
-    
-    # Set default values for FYI and local_only
-    FYI = ""
-    if len(sys.argv) > 3:
-        FYI = sys.argv[3]
+	print(sys.argv)
+	extract_scenes_path = sys.argv[1]
+	cache_path = sys.argv[2]
+	
+	# Set default values for FYI and local_only
+	FYI = ""
+	if len(sys.argv) > 3:
+		FYI = sys.argv[3]
 
-    local_only = False
-    if len(sys.argv) > 4:
-        # Convert the string argument to a boolean
-        local_only = sys.argv[4].lower() in ('true', '1', 't')
+	local_only = False
+	if len(sys.argv) > 4:
+		# Convert the string argument to a boolean
+		local_only = sys.argv[4].lower() in ('true', '1', 't')
 
-    # Example usage
-    captionGen = MultiTypeCaptionGenerator(cache_path=cache_path, FYI=FYI, local_only=local_only)
+	# Example usage
+	captionGen = MultiTypeCaptionGenerator(cache_path=cache_path, FYI=FYI, local_only=local_only)
 
-    with open(extract_scenes_path, "r") as f:
-        data = json.load(f)
+	with open(extract_scenes_path, "r") as f:
+		data = json.load(f)
 
-    results = captionGen.caption_generation(data)
-    print(results)
+	results = captionGen.caption_generation(data)
+	print(results)
