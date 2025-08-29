@@ -90,6 +90,7 @@ class OpenGvLab(VisionModel):
     def generate(self, image: Image.Image, text: str = "") -> str:
 
         model_name = "OpenGVLab/InternVL3-2B"
+        model_name = "OpenGVLab/InternVL3_5-1B"
         self.model = AutoModel.from_pretrained(
             model_name,
             dtype=torch.bfloat16,  # Use bfloat16 as recommended

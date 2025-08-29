@@ -138,8 +138,16 @@ class MultiTypeCaptionGenerator:
 			print(f"🔍 Worker {type_id} looking for next frame...")
 			result_tuple = self._get_next_index(temp_path)
 			if result_tuple[0] is None:
-				print(f"✋ Worker {type_id} - no more frames available")
-				break
+				with self.lock: # Lock to safely read the temp file
+					temp_data = self._load_temp(temp_path)
+				is_all_processed = all(entry["processed"] for entry in temp_data)
+				if is_all_processed:
+					print(f"✅ Worker {type_id} confirms all frames are processed. Exiting.")
+					break # The job is completely finished.
+				else:
+					print(f"⏳ Worker {type_id} - No available frames, but other workers are still busy. Waiting...")
+					time.sleep(5) # Wait for 5 seconds for another frame to become available.
+					continue # Go back to the top of the loop and check again.
 			
 			idx, temp_data = result_tuple
 			print(f"📋 Worker {type_id} got index {idx}")
@@ -398,7 +406,7 @@ class MultiTypeCaptionGenerator:
 				if status["failure_count"] >= 3:
 					status["is_skipped"] = True
 					status["skip_until"] = time.time() + self.skip_duration
-					logger_config.critical(f"Handler {handler_key} failed {status['failure_count']} times. Skipping for {self.skip_duration} seconds.")
+					logger_config.error(f"Handler {handler_key} failed {status['failure_count']} times. Skipping for {self.skip_duration} seconds.")
 			
 			# Re-raise the exception so the worker can handle it appropriately
 			raise
