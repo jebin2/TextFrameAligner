@@ -643,6 +643,8 @@ class TextFrameAligner:
 				config.user_data_dir = os.getenv("PROFILE_PATH", None)
 
 				while times > 0 and match_scene is None:
+					config.starting_server_port_to_check = [20081, 21081][0 if times % 2 == 0 else 1]
+					config.starting_debug_port_to_check = [22224, 23224][0 if times % 2 == 0 else 1]
 					baseUIChat = [AIStudioUIChat, GeminiUIChat][0 if times % 2 == 0 else 1](config)
 					match_scene = json_repair.loads(baseUIChat.chat(
 						user_prompt=text,
