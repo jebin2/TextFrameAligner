@@ -27,7 +27,9 @@ import shutil
 from gemiwrap import GeminiWrapper
 from extract_scenes import extract_scenes as extract_scenes_method, resize_to_480p
 import traceback
-from aistudio_ui_handler import run_gemini_generation
+from chat_bot_ui_handler import AIStudioUIChat, GeminiUIChat
+import json_repair
+from browser_manager.browser_config import BrowserConfig
 from tqdm import tqdm
 import subprocess, sys
 from dotenv import load_dotenv
@@ -637,8 +639,15 @@ class TextFrameAligner:
 				# match_scene = json.loads(model_responses[0])["data"]
 				times = 5
 				match_scene = None
+				config = BrowserConfig()
+				config.user_data_dir = os.getenv("PROFILE_PATH", None)
+
 				while times > 0 and match_scene is None:
-					match_scene, _ = run_gemini_generation(system_prompt, text)
+					baseUIChat = [AIStudioUIChat, GeminiUIChat][0 if times % 2 == 0 else 1](config)
+					match_scene = json_repair.loads(baseUIChat.chat(
+						user_prompt=text,
+						system_prompt=system_prompt
+					))
 					times -= 1
 					logger_config.info("wait before next try", seconds=10)
 				if not match_scene:
