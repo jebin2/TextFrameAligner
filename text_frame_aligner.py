@@ -124,7 +124,7 @@ class TextFrameAligner:
 		if self.embedder is not None:
 			return
 		logger_config.info("Loading SentenceTransformer")
-		self.embedder = SentenceTransformer(self.sentence_model_name, device="cpu") #self.device
+		self.embedder = SentenceTransformer(self.sentence_model_name, device=common.get_device())
 		logger_config.info("SentenceTransformer loaded successfully")
 
 	def unload_sentence_transformer(self):
@@ -851,7 +851,7 @@ class TextFrameAligner:
 			self.cache_path,
 			FYI,
 			str(local_only)  # Convert boolean to string
-		], check=True, preexec_fn=os.setsid)
+		], check=True, preexec_fn=os.setsid, env={**os.environ, 'PYTHONUNBUFFERED': '1', 'CUDA_LAUNCH_BLOCKING': '1', 'USE_CPU_IF_POSSIBLE': 'true'})
 		with open(os.path.join(self.cache_path, "caption_generation.json"), 'r') as f:
 			captions = json.load(f)
 		common.manage_gpu(action="clear_cache")

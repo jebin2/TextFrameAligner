@@ -9,11 +9,11 @@ import common
 class ChatService:
 
     def __init__(self, model = "gemma3:latest", unload=False, from_online=False):
-        if common.is_gpu_available():
-            os.environ.pop("OLLAMA_NO_GPU", None)
-        else:
+        if common.get_device() == "cpu":
             os.environ["OLLAMA_NO_GPU"] = "1"
-        os.environ["OLLAMA_NO_GPU"] = "1" # try with cpu only
+        else:
+            os.environ.pop("OLLAMA_NO_GPU", None)
+
         import ollama
         self.client = ollama.Client(host=custom_env.OLLAMA_REQ_URL)
         self.default_model = model

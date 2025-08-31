@@ -6,7 +6,7 @@ from transformers import AutoImageProcessor, AutoModel
 import common
 
 class FaceDINO:
-	def __init__(self, model_name="facebook/dinov3-vitl16-pretrain-lvd1689m", device="cuda", threshold=0.9):
+	def __init__(self, model_name="facebook/dinov3-vitl16-pretrain-lvd1689m", device=None, threshold=0.9):
 		self.device = device or ("cuda" if common.is_gpu_available() else "cpu")
 		self.processor = AutoImageProcessor.from_pretrained(model_name)
 		self.model = AutoModel.from_pretrained(model_name).to(self.device)

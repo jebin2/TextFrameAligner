@@ -284,3 +284,9 @@ def is_gpu_available(verbose=True):
                 print("CUDA detected but busy/unavailable. Please CPU.")
             return False
         raise  # re-raise if it's some other unexpected error
+
+def get_device(is_vision=False):
+    if not is_vision and os.getenv("USE_CPU_IF_POSSIBLE", None):
+        return "cpu"
+    else:
+        return "cuda" if is_gpu_available() else "cpu"
