@@ -115,27 +115,27 @@ class MultiTypeCaptionGenerator:
 		while True:
 			# --- NEW: Proactively check if the handler is skipped and pause the worker ---
 			if not self.local_only: # This logic only applies to non-local handlers
+				skip_time = None
 				with self.handler_lock:
 					status = self.handler_statuses[handler_key]
 					if status["is_skipped"]:
 						remaining_skip_time = status["skip_until"] - time.time()
 						if remaining_skip_time > 0:
-							# Release lock before sleeping to not block other threads
-							self.handler_lock.release()
-							
-							logger_config.warning(
-								f"🟡 Worker {type_id} (Handler {handler_key}) is paused. "
-								f"Handler is skipped for another {remaining_skip_time:.1f} seconds."
-							)
-							time.sleep(remaining_skip_time + 1) # Sleep until the skip duration is over + 1s buffer
-							
-							# Re-enter the loop to check for tasks again
-							continue 
+							skip_time = remaining_skip_time
 						else:
 							# If time is up, reactivate the handler
 							logger_config.info(f"Reactivating handler {handler_key} after skip period.")
 							status["is_skipped"] = False
 							status["failure_count"] = 0
+
+				# 🔑 do the waiting *after* releasing the lock
+				if skip_time:
+					logger_config.warning(
+						f"🟡 Worker {type_id} (Handler {handler_key}) is paused. "
+						f"Handler is skipped for another {skip_time:.1f} seconds."
+					)
+					time.sleep(skip_time + 1)
+					continue
 				
 			print(f"🔍 Worker {type_id} looking for next frame...")
 			result_tuple = self._get_next_index(temp_path)
