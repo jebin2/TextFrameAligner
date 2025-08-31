@@ -4,6 +4,7 @@ warnings.filterwarnings("ignore", category=FutureWarning)
 import logging
 logging.getLogger().setLevel(logging.ERROR)
 
+import common
 from custom_logger import logger_config
 from PIL import Image
 import torch
@@ -46,14 +47,14 @@ class TextFrameAligner:
 				 vision_model_name="google/siglip2-so400m-patch16-384",  # Changed to SigLIP
 				 max_workers=None):
 		
-		self.device = "cuda" if torch.cuda.is_available() else "cpu"
+		self.device = "cuda" if common.is_gpu_available() else "cpu"
 		self.max_workers = max_workers or max(8, mp.cpu_count()-4)
 		logger_config.info("TextFrameAligner initialization started")
 		logger_config.info(f"Compute device: {self.device}, Max workers: {self.max_workers}")
 		
 		# Environment setup with optimizations
 		os.environ["HF_HUB_TIMEOUT"] = "120"
-		if torch.cuda.is_available():
+		if common.is_gpu_available():
 			torch.backends.cudnn.benchmark = True
 			torch.set_float32_matmul_precision('high')
 
@@ -123,9 +124,7 @@ class TextFrameAligner:
 		if self.embedder is not None:
 			return
 		logger_config.info("Loading SentenceTransformer")
-		self.embedder = SentenceTransformer(self.sentence_model_name)
-		if self.device == "cuda":
-			self.embedder = self.embedder.to(self.device)
+		self.embedder = SentenceTransformer(self.sentence_model_name, device="cpu") #self.device
 		logger_config.info("SentenceTransformer loaded successfully")
 
 	def unload_sentence_transformer(self):
@@ -133,7 +132,7 @@ class TextFrameAligner:
 		if self.embedder:
 			logger_config.info("Unloading SentenceTransformer model")
 			del self.embedder
-			manage_gpu("clear_cache")
+			common.manage_gpu("clear_cache")
 
 	def load_blip_on_demand(self):
 		"""Load BLIP model for image captioning"""
@@ -158,7 +157,7 @@ class TextFrameAligner:
 			del self.blip_model, self.processor
 			self.blip_model = None
 			self.processor = None
-			manage_gpu("clear_cache")
+			common.manage_gpu("clear_cache")
 
 	@torch.inference_mode()
 	def compute_frame_vision_embeddings(self, frame_paths: List[str]) -> torch.Tensor:
@@ -222,7 +221,7 @@ class TextFrameAligner:
 
 			# Clean up GPU memory
 			del inputs, image_features
-			manage_gpu("clear_cache")
+			common.manage_gpu("clear_cache")
 
 		# Combine all embeddings
 		frame_vision_embeddings = torch.cat(all_embeddings, dim=0)
@@ -647,11 +646,11 @@ class TextFrameAligner:
 				# match_scene = json.loads(model_responses[0])["data"]
 				times = 5
 				match_scene = None
-				config = BrowserConfig()
-				config.user_data_dir = os.getenv("PROFILE_PATH", None)
 
 				while times > 0 and match_scene is None:
 					try:
+						config = BrowserConfig()
+						config.user_data_dir = os.getenv("PROFILE_PATH", None)
 						config.starting_server_port_to_check = [20081, 21081][0 if times % 2 == 0 else 1]
 						config.starting_debug_port_to_check = [22224, 23224][0 if times % 2 == 0 else 1]
 						baseUIChat = [AIStudioUIChat, GeminiUIChat][0 if times % 2 == 0 else 1](config)
@@ -842,7 +841,7 @@ class TextFrameAligner:
 
 				with open(os.path.join(self.cache_path, "extract_scenes.json"), "w") as f:
 					json.dump(extract_scenes_json, f, indent=4)
-		manage_gpu(action="clear_cache")
+		common.manage_gpu(action="clear_cache")
 
 		# Step 3: Generate captions
 		subprocess.run([
@@ -855,7 +854,7 @@ class TextFrameAligner:
 		], check=True, preexec_fn=os.setsid)
 		with open(os.path.join(self.cache_path, "caption_generation.json"), 'r') as f:
 			captions = json.load(f)
-		manage_gpu(action="clear_cache")
+		common.manage_gpu(action="clear_cache")
 
 		# Step 7: Process text
 		sentences = self.split_recap_sentences(recap_text)
@@ -934,7 +933,7 @@ class TextFrameAligner:
 			self.embedder = None
 		
 		# Clear GPU memory
-		manage_gpu("clear_cache")
+		common.manage_gpu("clear_cache")
 		
 		# Force garbage collection
 		gc.collect()
@@ -972,7 +971,7 @@ class TextFrameAligner:
 			# Free CUDA memory if applicable
 			try:
 				import torch
-				if torch.cuda.is_available():
+				if common.is_gpu_available():
 					torch.cuda.empty_cache()
 					torch.cuda.ipc_collect()
 					print("CUDA memory cleaned.")
@@ -980,7 +979,7 @@ class TextFrameAligner:
 				print("Torch not available; skipped GPU cleanup.")
 
 			print("Cleanup completed successfully.")
-			manage_gpu(action="clear_cache")
+			common.manage_gpu(action="clear_cache")
 		except Exception as e:
 			print(f"Error during cleanup: {e}")
 
@@ -992,58 +991,6 @@ class TextFrameAligner:
 
 	def __del__(self):
 		self.cleanup()
-
-def manage_gpu(size_gb: float = 0, gpu_index: int = 0, action: str = "check"):
-    """
-    Manage GPU memory:
-      - check       → just prints memory + process table
-      - clear_cache → clears PyTorch cache
-      - kill        → kills all GPU processes
-    """
-    try:
-        import pynvml,signal, gc
-        pynvml.nvmlInit()
-        handle = pynvml.nvmlDeviceGetHandleByIndex(gpu_index)
-        info = pynvml.nvmlDeviceGetMemoryInfo(handle)
-
-        free_gb = info.free / 1024**3
-        total_gb = info.total / 1024**3
-
-        print(f"\nGPU {gpu_index}: Free {free_gb:.2f} GB / Total {total_gb:.2f} GB")
-
-        # Show processes
-        processes = pynvml.nvmlDeviceGetComputeRunningProcesses(handle)
-        print("\nActive GPU Processes:")
-        print(f"{'PID':<8} {'Process Name':<40} {'Used (GB)':<10}")
-        print("-" * 60)
-        for p in processes:
-            used_gb = p.usedGpuMemory / 1024**3
-            proc_name = pynvml.nvmlSystemGetProcessName(p.pid).decode(errors="ignore")
-            print(f"{p.pid:<8} {proc_name:<40} {used_gb:.2f}")
-
-        if action == "clear_cache":
-            try:
-                import torch
-                torch.cuda.empty_cache()
-                torch.cuda.synchronize()
-                time.sleep(1)
-                print("\n🧹 Cleared PyTorch CUDA cache")
-            except ImportError:
-                print("\n⚠️ PyTorch not installed, cannot clear cache.")
-
-        elif action == "kill":
-            for p in processes:
-                proc_name = pynvml.nvmlSystemGetProcessName(p.pid).decode(errors="ignore")
-                try:
-                    os.kill(p.pid, signal.SIGKILL)
-                    print(f"❌ Killed {p.pid} ({proc_name})")
-                except Exception as e:
-                    print(f"⚠️ Could not kill {p.pid}: {e}")
-            manage_gpu(action="clear_cache")
-        gc.collect()
-        gc.collect()
-        return free_gb > size_gb
-    except: return False
 
 # Usage example and main execution
 if __name__ == "__main__":

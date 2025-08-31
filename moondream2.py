@@ -3,7 +3,7 @@ from PIL import Image
 import time
 import torch
 import os
-import traceback
+import common
 
 class Moondream2(VisionModel):
     def load_model(self):
@@ -12,7 +12,7 @@ class Moondream2(VisionModel):
         os.environ["CUDA_LAUNCH_BLOCKING"] = "1"
         
         # Clear CUDA cache first
-        if torch.cuda.is_available():
+        if common.is_gpu_available():
             torch.cuda.empty_cache()
             torch.cuda.synchronize()
         
@@ -40,7 +40,7 @@ class Moondream2(VisionModel):
                         del self.model
                     except:
                         pass
-                if torch.cuda.is_available():
+                if common.is_gpu_available():
                     torch.cuda.empty_cache()
                     torch.cuda.synchronize()
                 
@@ -78,7 +78,7 @@ class Moondream2(VisionModel):
         )
         
         # Move to GPU if available
-        if torch.cuda.is_available():
+        if common.is_gpu_available():
             print("🔧 Moving to GPU...")
             device = torch.device(f"cuda:{torch.cuda.current_device()}")
             model = model.to(device, dtype=torch.bfloat16)
@@ -90,7 +90,7 @@ class Moondream2(VisionModel):
         """Strategy 2: Load with explicit device mapping"""
         from transformers import AutoModelForCausalLM
         
-        if torch.cuda.is_available():
+        if common.is_gpu_available():
             device_map = f"cuda:{torch.cuda.current_device()}"
             dtype = torch.bfloat16
         else:

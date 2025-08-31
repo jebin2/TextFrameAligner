@@ -1,15 +1,19 @@
 from custom_logger import logger_config
 import custom_env
-import terminal
-from gemini_config import pre_model_wrapper
 import requests
 import subprocess
 import time
+import os
+import common
 
 class ChatService:
 
     def __init__(self, model = "gemma3:latest", unload=False, from_online=False):
-        terminal.run(["rm", "~/.ollama/history"])
+        if common.is_gpu_available():
+            os.environ.pop("OLLAMA_NO_GPU", None)
+        else:
+            os.environ["OLLAMA_NO_GPU"] = "1"
+        os.environ["OLLAMA_NO_GPU"] = "1" # try with cpu only
         import ollama
         self.client = ollama.Client(host=custom_env.OLLAMA_REQ_URL)
         self.default_model = model
@@ -138,6 +142,7 @@ class ChatService:
             raise ValueError(f"Error during chat response generation: {e}")
 
     def get_gemini_response(self, user_prompt, system_message=None, history=None, images=None, format=None):
+        from gemini_config import pre_model_wrapper
         geminiWrapper = pre_model_wrapper(
             system_instruction=system_message,
             schema=format,

@@ -4,7 +4,7 @@ import numpy as np
 
 class ResponseValidator:
 	def __init__(self):
-		self.model = SentenceTransformer("all-MiniLM-L6-v2")
+		self.model = SentenceTransformer("all-MiniLM-L6-v2", device="cpu")
 		
 		# Flagged response examples
 		flagged_examples = [

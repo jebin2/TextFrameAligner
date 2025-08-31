@@ -3,10 +3,11 @@ from pathlib import Path
 from PIL import Image
 import torch
 from transformers import AutoImageProcessor, AutoModel
+import common
 
 class FaceDINO:
-	def __init__(self, model_name="facebook/dinov3-vitl16-pretrain-lvd1689m", device=None, threshold=0.9):
-		self.device = device or ("cuda" if torch.cuda.is_available() else "cpu")
+	def __init__(self, model_name="facebook/dinov3-vitl16-pretrain-lvd1689m", device="cuda", threshold=0.9):
+		self.device = device or ("cuda" if common.is_gpu_available() else "cpu")
 		self.processor = AutoImageProcessor.from_pretrained(model_name)
 		self.model = AutoModel.from_pretrained(model_name).to(self.device)
 		self.model.eval()
@@ -85,7 +86,7 @@ class FaceDINO:
 			gc.collect()
 
 			# Clear CUDA memory if available
-			if torch.cuda.is_available():
+			if common.is_gpu_available():
 				torch.cuda.empty_cache()
 				torch.cuda.ipc_collect()
 

@@ -2,6 +2,7 @@ from vision_model import VisionModel
 from PIL import Image
 import torch
 import time
+import common
 
 MID = "apple/FastVLM-1.5B"
 IMAGE_TOKEN_INDEX = -200  # what the model code looks for
@@ -12,7 +13,7 @@ class AppleFastVLM(VisionModel):
 		self.tokenizer = AutoTokenizer.from_pretrained(MID, trust_remote_code=True)
 		self.model = AutoModelForCausalLM.from_pretrained(
 			MID,
-			dtype=torch.float16 if torch.cuda.is_available() else torch.float32,
+			dtype=torch.float16 if common.is_gpu_available() else torch.float32,
 			device_map="auto",
 			trust_remote_code=True
 		)

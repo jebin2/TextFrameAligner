@@ -4,7 +4,7 @@ from moondream2 import Moondream2
 from concurrent.futures import ThreadPoolExecutor
 from threading import Lock
 from custom_logger import logger_config
-import traceback
+import common
 import torch
 import threading
 import time # Import time for skip logic
@@ -50,7 +50,7 @@ class MultiTypeCaptionGenerator:
 				thread_id = threading.current_thread().ident
 				print(f"🔧 Thread {thread_id} initializing model...")
 				try:
-					if torch.cuda.is_available():
+					if common.is_gpu_available():
 						torch.cuda.empty_cache()
 						torch.cuda.synchronize()
 					
@@ -73,7 +73,9 @@ class MultiTypeCaptionGenerator:
 	def _load_temp(self, temp_path):
 		if os.path.exists(temp_path):
 			with open(temp_path, "r") as f:
-				return json.load(f)
+				try:
+					return json.load(f)
+				except: pass
 		return [{"in_progress": False, "processed": False, "caption": None, "dialogue": None} 
 				for _ in range(self.num_frames)]
 
@@ -102,7 +104,7 @@ class MultiTypeCaptionGenerator:
 		handler_key = type_id if self.local_only else (type_id % self.num_types)
 		print(f"🚀 Worker {type_id} (Handler {handler_key}) started on Thread {thread_id}")
 		
-		if torch.cuda.is_available() and not self.local_only:
+		if common.is_gpu_available() and not self.local_only:
 			try:
 				device_id = type_id % torch.cuda.device_count()
 				torch.cuda.set_device(device_id)
@@ -217,7 +219,7 @@ class MultiTypeCaptionGenerator:
 						except:
 							pass
 						self._thread_local.model = None
-					if torch.cuda.is_available():
+					if common.is_gpu_available():
 						torch.cuda.empty_cache()
 						torch.cuda.synchronize()
 				
@@ -231,7 +233,7 @@ class MultiTypeCaptionGenerator:
 		if hasattr(self._thread_local, 'model') and self._thread_local.model is not None:
 			print(f"🧹 Worker {type_id} cleaning up thread-local model")
 			del self._thread_local.model
-			if torch.cuda.is_available():
+			if common.is_gpu_available():
 				torch.cuda.empty_cache()
 		
 		print(f"🏁 Worker {type_id} finished. Processed {processed_count} frames.")
@@ -336,7 +338,7 @@ class MultiTypeCaptionGenerator:
 		if hasattr(self, '_thread_local') and self._thread_local:
 			del self._thread_local
 			
-		if torch.cuda.is_available():
+		if common.is_gpu_available():
 			torch.cuda.empty_cache()
 		
 		return captions

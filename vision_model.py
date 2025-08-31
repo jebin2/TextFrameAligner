@@ -1,11 +1,12 @@
 from abc import ABC, abstractmethod
 from PIL import Image
 import torch
+import common
 
 # 🧠 Base VisionModel
 class VisionModel(ABC):
 	def __init__(self, device=None):
-		self.device = device or ("cuda" if torch.cuda.is_available() else "cpu")
+		self.device = device or ("cuda" if common.is_gpu_available() else "cpu")
 		self.model = None
 		self.processor = None
 		self.load_model()
