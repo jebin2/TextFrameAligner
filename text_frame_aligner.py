@@ -569,23 +569,30 @@ class TextFrameAligner:
 		with open("sentence_split_system_prompt.md", 'r') as file:
 			system_prompt = file.read()
 
-		geminiWrapper = GeminiWrapper(system_instruction=system_prompt)
-		model_responses = geminiWrapper.send_message(text, schema=genai.types.Schema(
-			type=genai.types.Type.OBJECT,
-			required=["sentences"],
-			properties={
-				"sentences": genai.types.Schema(
-					type=genai.types.Type.ARRAY,
-					items=genai.types.Schema(
-						type=genai.types.Type.STRING,
-					),
-				),
-			},
-		))
-		sentences = json.loads(model_responses[0])["sentences"]
+		sentences = []
+		from llm_chat import ChatService
+		chat_service = ChatService()
+		with open("sentence_split_system_prompt.md", 'r') as file:
+			system_prompt = file.read()
 
-		if not self.is_same_sentence(" ".join(sentences), text):
-			raise ValueError(f"process_narration_text is not correct")
+		for attempt in range(5):
+			try:
+				model_response = chat_service.generate_response(
+					user_prompt=text,
+					system_message=system_prompt
+				)
+				sentences = json_repair.loads(model_response)
+				joined_processed = " ".join(sentences).strip()
+
+				if "<unused" in joined_processed or not self.is_same_sentence(joined_processed, text):
+					raise ValueError("sentences is not correct")
+
+				# success → break out
+				break
+			except Exception as e:
+				if attempt >= 4:
+					raise e
+		chat_service.unload_modal()
 
 		logger_config.info(f"Generated {len(sentences)} sentences")
 		with open(cache_dir, 'w') as f:
@@ -602,6 +609,7 @@ class TextFrameAligner:
 				with open(cache_dir, "r") as f:
 					try:
 						match_scene = json.load(f)
+						test = [sent["recap_sentence"] for sent in match_scene]
 					except: match_scene = None
 
 			if not match_scene:
@@ -643,13 +651,16 @@ class TextFrameAligner:
 				config.user_data_dir = os.getenv("PROFILE_PATH", None)
 
 				while times > 0 and match_scene is None:
-					config.starting_server_port_to_check = [20081, 21081][0 if times % 2 == 0 else 1]
-					config.starting_debug_port_to_check = [22224, 23224][0 if times % 2 == 0 else 1]
-					baseUIChat = [AIStudioUIChat, GeminiUIChat][0 if times % 2 == 0 else 1](config)
-					match_scene = json_repair.loads(baseUIChat.chat(
-						user_prompt=text,
-						system_prompt=system_prompt
-					))
+					try:
+						config.starting_server_port_to_check = [20081, 21081][0 if times % 2 == 0 else 1]
+						config.starting_debug_port_to_check = [22224, 23224][0 if times % 2 == 0 else 1]
+						baseUIChat = [AIStudioUIChat, GeminiUIChat][0 if times % 2 == 0 else 1](config)
+						match_scene = json_repair.loads(baseUIChat.chat(
+							user_prompt=text,
+							system_prompt=system_prompt
+						))
+						test = [sent["recap_sentence"] for sent in match_scene]
+					except: pass
 					times -= 1
 					logger_config.info("wait before next try", seconds=10)
 				if not match_scene:
