@@ -9,7 +9,8 @@ import torch
 import threading
 import time # Import time for skip logic
 from dotenv import load_dotenv
-import subprocess, sys
+import sys
+from chat_bot_ui_handler import GoogleAISearchChat, AIStudioUIChat, QwenUIChat, PerplexityUIChat, GeminiUIChat, GrokUIChat, MetaUIChat, CopilotUIChat, BingUIChat, MistralUIChat, PallyUIChat
 
 if os.path.exists(".env"):
 	load_dotenv()
@@ -21,7 +22,8 @@ class HandlerSkippedException(Exception):
 class MultiTypeCaptionGenerator:
 	def __init__(self, cache_path, num_types=12, FYI="", local_only=False, skip_duration_seconds=100):
 		self.cache_path = cache_path
-		self.num_types = num_types
+		self.sources = [GoogleAISearchChat, AIStudioUIChat, QwenUIChat, PerplexityUIChat, GeminiUIChat, GrokUIChat, MetaUIChat, CopilotUIChat, BingUIChat, MistralUIChat, PallyUIChat, GeminiUIChat, GoogleAISearchChat, BingUIChat, GeminiUIChat, GoogleAISearchChat, BingUIChat]
+		self.num_types = len(self.sources) + 1
 		self.lock = Lock()  # for safely updating temp JSON
 		self.model_lock = Lock()
 		self.handler_lock = Lock() # NEW: Lock for handler statuses
@@ -172,7 +174,7 @@ class MultiTypeCaptionGenerator:
 				else:
 					new_prompt = f"""{prompt} Also identify all the characters name in this frame. Keep your description to exactly 100 words or fewer.
 	{self.FYI}"""
-					result = self.search_in_ui_type(type_id, new_prompt, frame_path)
+					result = self.search_in_ui_type(type_id, new_prompt, frame_path, thread_id)
 
 				print(f"📝 Type {type_id} got result for frame {idx}: {result}")
 
@@ -343,8 +345,7 @@ class MultiTypeCaptionGenerator:
 		
 		return captions
 
-	def search_in_ui_type(self, type_id, prompt, file_path):
-		from chat_bot_ui_handler import GoogleAISearchChat, AIStudioUIChat, QwenUIChat, PerplexityUIChat, GeminiUIChat, GrokUIChat, MetaUIChat, CopilotUIChat, BingUIChat, MistralUIChat, PallyUIChat
+	def search_in_ui_type(self, type_id, prompt, file_path, thread_id):
 		from browser_manager.browser_config import BrowserConfig
 		import os
 		
@@ -363,13 +364,14 @@ class MultiTypeCaptionGenerator:
 				status["is_skipped"] = False
 				status["failure_count"] = 0
 
-		sources = [GoogleAISearchChat, AIStudioUIChat, QwenUIChat, PerplexityUIChat, GeminiUIChat, GrokUIChat, MetaUIChat, CopilotUIChat, BingUIChat, MistralUIChat, PallyUIChat]
-		source = sources[handler_key]  # Remove the -1 since handler_key is already adjusted
+		
+		source = self.sources[handler_key]  # Remove the -1 since handler_key is already adjusted
 
 		try:
 			config = BrowserConfig()
-			config.starting_server_port_to_check = [9081, 10081, 11081, 12081, 13081, 14081, 15081, 16081, 17081, 18081, 19081][handler_key]
-			config.starting_debug_port_to_check = [10224, 11224, 12224, 13224, 14224, 15224, 16224, 17224, 18224, 19224, 20224][handler_key]
+			config.docker_name = f"thread_id_{thread_id}"
+			config.starting_server_port_to_check = [10081 + (i*1000) for i in range(self.num_types)][handler_key]
+			config.starting_debug_port_to_check = [20224 * (i*1000) for i in range(self.num_types)][handler_key]
 
 			if source.__name__ == "GrokUIChat" or source.__name__ == "PerplexityUIChat":
 				config.user_data_dir = os.getenv("PROFILE_PATH_1")

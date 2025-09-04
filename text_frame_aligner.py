@@ -616,6 +616,7 @@ class TextFrameAligner:
 				with open(cache_dir, "r") as f:
 					try:
 						match_scene = json.load(f)
+						match_scene[len(sentences)-1]
 						test = [sent["recap_sentence"] for sent in match_scene]
 					except: match_scene = None
 
@@ -666,10 +667,11 @@ class TextFrameAligner:
 							user_prompt=text,
 							system_prompt=system_prompt
 						))
+						match_scene[len(sentences)-1]
 						test = [sent["recap_sentence"] for sent in match_scene]
-					except: pass
+					except: match_scene = None
 					times -= 1
-					logger_config.info("wait before next try", seconds=10)
+					logger_config.info("wait before next try", seconds=60)
 				if not match_scene:
 					raise ValueError("failed to get match_scene.")
 				# Cache results

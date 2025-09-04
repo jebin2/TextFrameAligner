@@ -139,6 +139,13 @@ class ChatService:
             return content
 
         except Exception as e:
+            process = subprocess.Popen(
+                ["sudo", "-S", "systemctl", "restart", "ollama"],
+                stdin=subprocess.PIPE,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+            )
+            out, err = process.communicate(input=f"{os.getenv('CLOWN')}\n".encode())
             raise ValueError(f"Error during chat response generation: {e}")
 
     def get_gemini_response(self, user_prompt, system_message=None, history=None, images=None, format=None):
@@ -197,11 +204,21 @@ if __name__ == "__main__":
     chat_service = ChatService()
 
     response = chat_service.generate_response(
-        user_prompt=content.get_user_prompt(),
-        images=content.get_images_prompt(),
-        system_message=content.get_system_prompt(),
+        user_prompt="""CaptionCreator main  ❯ cat README1.md
+cat: README1.md: No such file or directory""",
+        system_message="""You are a Linux terminal error resolver. When given terminal output:
+
+1. Identify the LAST executed command and its error/output
+2. Provide only:
+   - **Suggestion:** Specific solution or next step or it might be like that or probably this one
+
+Rules:
+- Focus only on the final command that was run
+- No explanations, examples, or additional text
+
+Format:
+**Suggestion:** [specific solution]""",
         history=None,
-        format=content.json_schema()
     )
     chat_service.unload_modal()
     # logger_config_config.debug(response)
