@@ -28,7 +28,7 @@ import shutil
 from gemiwrap import GeminiWrapper
 from extract_scenes import extract_scenes as extract_scenes_method, resize_to_480p
 import traceback
-from chat_bot_ui_handler import AIStudioUIChat, GeminiUIChat
+from chat_bot_ui_handler import AIStudioUIChat
 import json_repair
 from browser_manager.browser_config import BrowserConfig
 from tqdm import tqdm
@@ -565,8 +565,16 @@ class TextFrameAligner:
 
 		logger_config.info("Starting sentence splitting")
 
-		with open("sentence_split_system_prompt.md", 'r') as file:
-			system_prompt = file.read()
+		subprocess.run([
+			sys.executable,
+			"split_paragraph.py",
+			text,
+			cache_dir
+		], check=True, preexec_fn=os.setsid, env={**os.environ, 'PYTHONUNBUFFERED': '1', 'CUDA_LAUNCH_BLOCKING': '1', 'USE_CPU_IF_POSSIBLE': 'true'})
+		with open(cache_dir, 'r') as f:
+			sentences = json.load(f)
+		common.manage_gpu(action="clear_cache")
+		return sentences
 
 		sentences = []
 		from llm_chat import ChatService
@@ -651,9 +659,9 @@ class TextFrameAligner:
 					try:
 						config = BrowserConfig()
 						config.user_data_dir = os.getenv("PROFILE_PATH", None)
-						config.starting_server_port_to_check = [20081, 21081][0 if times % 2 == 0 else 1]
-						config.starting_debug_port_to_check = [22224, 23224][0 if times % 2 == 0 else 1]
-						baseUIChat = [AIStudioUIChat, GeminiUIChat][0 if times % 2 == 0 else 1](config)
+						config.starting_server_port_to_check = 20081
+						config.starting_debug_port_to_check = 22224
+						baseUIChat = AIStudioUIChat(config)
 						match_scene = json_repair.loads(baseUIChat.chat(
 							user_prompt=text,
 							system_prompt=system_prompt
@@ -763,12 +771,12 @@ class TextFrameAligner:
 		merged = []
 
 		# Load existing data in destination
-		if os.path.exists(dest_json_path):
-			with open(dest_json_path, "r", encoding="utf-8") as f:
-				try:
-					merged = json.load(f)
-				except json.JSONDecodeError:
-					merged = []
+		# if os.path.exists(dest_json_path):
+		# 	with open(dest_json_path, "r", encoding="utf-8") as f:
+		# 		try:
+		# 			merged = json.load(f)
+		# 		except json.JSONDecodeError:
+		merged = []
 
 		# Append data from old dirs
 		for old_path in copy_from_split_paths:
@@ -800,6 +808,7 @@ class TextFrameAligner:
 			input_json = json.load(file)
 
 		video_path = input_json["video_path"]
+		folder_name = input_json.get("folder_name", None)
 		recap_text = input_json["text"]
 		frame_timestamp = input_json.get("frame_timestamp", [])
 		frame_paths = input_json.get("frame_paths", [])
@@ -814,8 +823,7 @@ class TextFrameAligner:
 		if not FYI:
 			FYI = ""
 
-		self.set_cache_dir(video_path)
-
+		self.set_cache_dir(folder_name if folder_name else video_path)
 		if copy_from_split_paths:
 			extract_scenes_json = self.copy_and_append_json(copy_from_split_paths, f'{self.cache_path}/extract_scenes.json', 'extract_scenes.json')
 			captions = self.copy_and_append_json(copy_from_split_paths, f'{self.cache_path}/caption_generation.json', 'caption_generation.json')
@@ -899,11 +907,11 @@ class TextFrameAligner:
 			if os.path.isdir(os.path.join(TEMP_DIR, f))
 		]
 
-		# If more than 10 subfolders, delete oldest ones
-		if len(subfolders) > 10:
+		# If more than 100 subfolders, delete oldest ones
+		if len(subfolders) > 100:
 			# Sort by access time (oldest first)
 			subfolders.sort(key=lambda x: x[1])
-			folders_to_delete = subfolders[:-10]  # keep last 10
+			folders_to_delete = subfolders[:-100]  # keep last 100
 
 			for folder, _ in folders_to_delete:
 				folder_path = os.path.join(TEMP_DIR, folder)

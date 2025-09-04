@@ -159,7 +159,7 @@ class Moondream2(VisionModel):
 
 if __name__ == "__main__":
     model = Moondream2()
-    image = Image.open("/home/jebin/git/TextFrameAligner/temp_dir/Blue is the Warmest Color 2013_2161_4322/frames/scene_0000_at_9.38s.jpg")
+    image = Image.open("temp_dir/page-022.jpg_resize_frame__max_frame/sentence_12_frame_1.jpg")
     text = "Describe what is happening in this video frame as if you're telling a story. Focus on the main subjects, their actions, the setting, and any important details that would help someone understand the scene's context."
     start_time = time.time()
     response = model.generate(image)
