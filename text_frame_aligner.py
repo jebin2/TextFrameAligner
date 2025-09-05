@@ -255,12 +255,6 @@ class TextFrameAligner:
 		for source in sources:
 			config = BrowserConfig()
 
-			# Use a different profile for perplexity
-			if source.__name__ == "perplexity_ui_chat":
-				config.user_data_dir = os.getenv("PROFILE_PATH_1")
-			else:
-				config.user_data_dir = os.getenv("PROFILE_PATH")
-
 			result = source(user_prompt=prompt, file_path=file_path, config=config)
 			if result and len(result.split(" ")) > 20:
 				return result
@@ -659,11 +653,10 @@ class TextFrameAligner:
 				while times > 0 and match_scene is None:
 					try:
 						config = BrowserConfig()
-						config.user_data_dir = os.getenv("PROFILE_PATH", None)
 						config.starting_server_port_to_check = 20081
 						config.starting_debug_port_to_check = 22224
 						baseUIChat = AIStudioUIChat(config)
-						match_scene = json_repair.loads(baseUIChat.chat(
+						match_scene = json_repair.loads(baseUIChat.quick_chat(
 							user_prompt=text,
 							system_prompt=system_prompt
 						))

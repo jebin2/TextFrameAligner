@@ -371,12 +371,7 @@ class MultiTypeCaptionGenerator:
 			config = BrowserConfig()
 			config.docker_name = f"thread_id_{thread_id}"
 			config.starting_server_port_to_check = [10081 + (i*1000) for i in range(self.num_types)][handler_key]
-			config.starting_debug_port_to_check = [20224 * (i*1000) for i in range(self.num_types)][handler_key]
-
-			if source.__name__ == "GrokUIChat" or source.__name__ == "PerplexityUIChat":
-				config.user_data_dir = os.getenv("PROFILE_PATH_1")
-			else:
-				config.user_data_dir = os.getenv("PROFILE_PATH")
+			config.starting_debug_port_to_check = [20224 + (i*1000) for i in range(self.num_types)][handler_key]
 
 			if source.__name__ == "MetaUIChat" or source.__name__ == "AIStudioUIChat":
 				additional_flags = []
@@ -385,7 +380,7 @@ class MultiTypeCaptionGenerator:
 				config.additionl_docker_flag = ' '.join(additional_flags)
 
 			src_obj = source(config=config)
-			result = src_obj.chat(user_prompt=prompt, file_path=file_path)
+			result = src_obj.quick_chat(user_prompt=prompt, file_path=file_path)
 	
 			if not result or len(result.split(" ")) <= 40:
 				raise ValueError(f"Handler {handler_key} returned an invalid or empty result.")
