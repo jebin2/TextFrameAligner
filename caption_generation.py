@@ -90,10 +90,25 @@ class MultiTypeCaptionGenerator:
 		"""Get next available index and mark it as in_progress atomically"""
 		with self.lock:
 			temp_data = self._load_temp(temp_path)
-			
+			progress_start_time_timeout = 60 * 1 * 10  # e.g., 10 minutes
+
+			released = False
+			for i, entry in enumerate(temp_data):
+				if entry["in_progress"]:
+					if entry.get("progress_start_time") and (time.time() - entry["progress_start_time"]) > progress_start_time_timeout:
+						entry["in_progress"] = False
+						entry["progress_start_time"] = None
+						released = True
+						print(f"⏪ Releasing stale index {i}")
+
+			if released:
+				with open(temp_path, "w") as f:
+					json.dump(temp_data, f, indent=4)
+
 			for i, entry in enumerate(temp_data):
 				if not entry["in_progress"] and not entry["processed"]:
 					temp_data[i]["in_progress"] = True
+					temp_data[i]["progress_start_time"] = time.time()  # Add timestamp
 					with open(temp_path, "w") as f:
 						json.dump(temp_data, f, indent=4)
 					print(f"🎯 Assigned index {i} to worker")
@@ -155,7 +170,7 @@ class MultiTypeCaptionGenerator:
 			
 			idx, temp_data = result_tuple
 			print(f"📋 Worker {type_id} got index {idx}")
-			
+
 			scene = extract_scenes_json[idx]
 			frame_path = scene["frame_path"][0]
 			dialogue = scene["dialogue"]
@@ -261,14 +276,17 @@ class MultiTypeCaptionGenerator:
 					"processed": False, 
 					"caption": None, 
 					"dialogue": extract_scenes_json[i]["dialogue"],
-					"frame_path": extract_scenes_json[i]["frame_path"][0]
+					"frame_path": extract_scenes_json[i]["frame_path"][0],
+					"progress_start_time": None
 				} 
 				for i in range(self.num_frames)
 			]
 			self._save_temp(temp_path, initial_data)
 		else:
+			# If the temp file exists, we are resuming.
 			temp_data = self._load_temp(temp_path)
 			
+			# Ensure the temp file length matches the input scenes.
 			if len(temp_data) != self.num_frames:
 				logger_config.warning(f"⚠️  Temp file has {len(temp_data)} frames, expected {self.num_frames}. Reinitializing...")
 				initial_data = [
@@ -283,24 +301,32 @@ class MultiTypeCaptionGenerator:
 				]
 				self._save_temp(temp_path, initial_data)
 			else:
+				# *** START OF THE FIX ***
+				# Reset any "in_progress" flags from a previous crashed run.
 				completed_count = 0
 				reset_count = 0
 				
 				for i, data in enumerate(temp_data):
 					if data["in_progress"]:
-						data["in_progress"] = False
-						data["processed"] = False
-						data["caption"] = None
+						data["in_progress"] = False # Reset the flag
+						data["processed"] = False # Ensure it's not marked as processed
+						data["caption"] = None    # Clear any partial caption
 						reset_count += 1
 					
 					if data["processed"] and data["caption"]:
 						completed_count += 1
 					
+					# Always update dialogue and frame_path in case the source changed
 					if i < len(extract_scenes_json):
 						data["dialogue"] = extract_scenes_json[i]["dialogue"]
-				
+						data["frame_path"] = extract_scenes_json[i]["frame_path"][0]
+
+				if reset_count > 0:
+					logger_config.info(f"🔧 Found and reset {reset_count} stale 'in_progress' frames from a previous run.")
+
 				self._save_temp(temp_path, temp_data)
-				logger_config.info(f"📋 Resuming: {completed_count} completed, {reset_count} reset from in_progress")
+				logger_config.info(f"📋 Resuming: {completed_count} frames already completed.")
+				# *** END OF THE FIX ***
 
 		prompt = "Describe what is happening in this video frame as if you're telling a story. Focus on the main subjects, their actions, the setting, and any important details."
 
@@ -374,13 +400,15 @@ class MultiTypeCaptionGenerator:
 			config.starting_debug_port_to_check = [20224 + (i*1000) for i in range(self.num_types)][handler_key]
 
 			if source.__name__ == "MetaUIChat" or source.__name__ == "AIStudioUIChat":
+				neko_base_path = "/".join(file_path.split("/")[:5])
+				neko_file_path = "/home/neko/Downloads/" + "/".join(file_path.split("/")[5:])
 				additional_flags = []
-				additional_flags.append(f'-v {os.getcwd()}/{os.getenv("TEMP_OUTPUT", "chat_bot_ui_handler_logs")}:/home/neko/Downloads')
+				additional_flags.append(f'-v {neko_base_path}:/home/neko/Downloads')
 				additional_flags.append(f'-v {os.getenv("PARENT_BASE_PATH")}/browser_manager/policies.json:/etc/opt/chrome/policies/managed/policies.json')
 				config.additionl_docker_flag = ' '.join(additional_flags)
 
 			src_obj = source(config=config)
-			result = src_obj.quick_chat(user_prompt=prompt, file_path=file_path)
+			result = src_obj.quick_chat(user_prompt=prompt, file_path=neko_file_path)
 	
 			if not result or len(result.split(" ")) <= 40:
 				raise ValueError(f"Handler {handler_key} returned an invalid or empty result.")
