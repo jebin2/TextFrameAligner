@@ -398,6 +398,7 @@ class MultiTypeCaptionGenerator:
 			config.docker_name = f"thread_id_{thread_id}"
 			config.starting_server_port_to_check = [10081 + (i*1000) for i in range(self.num_types)][handler_key]
 			config.starting_debug_port_to_check = [20224 + (i*1000) for i in range(self.num_types)][handler_key]
+			neko_file_path = file_path
 
 			if source.__name__ == "MetaUIChat" or source.__name__ == "AIStudioUIChat":
 				neko_base_path = "/".join(file_path.split("/")[:5])
