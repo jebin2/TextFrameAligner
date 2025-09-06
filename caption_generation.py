@@ -179,7 +179,7 @@ class MultiTypeCaptionGenerator:
 
 			try:
 				result = None
-				if common.get_device() != "cpu" and (type_id % self.num_types == 0 or self.local_only):
+				if common.get_device() == "nocpu" and (type_id % self.num_types == 0 or self.local_only):
 					model = self._load_moondream2()
 					if model:
 						result = model.generate(frame_path, prompt)

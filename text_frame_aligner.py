@@ -28,7 +28,7 @@ import shutil
 from gemiwrap import GeminiWrapper
 from extract_scenes import extract_scenes as extract_scenes_method, resize_to_480p
 import traceback
-from chat_bot_ui_handler import AIStudioUIChat
+from chat_bot_ui_handler import AIStudioUIChat, GeminiUIChat
 import json_repair
 from browser_manager.browser_config import BrowserConfig
 from tqdm import tqdm
@@ -88,10 +88,10 @@ class TextFrameAligner:
 		
 		logger_config.info("TextFrameAligner initialization completed")
 
-	def set_cache_dir(self, video_path: str) -> str:
+	def set_cache_dir(self, video_path: str, folder_name: str=None) -> str:
 		"""Generates a unique cache directory path for a given identifier."""
 		# content_hash = hashlib.md5(identifier.encode()).hexdigest()
-		self.cache_path = os.path.join(TEMP_DIR, Path(video_path).stem)
+		self.cache_path = os.path.join(TEMP_DIR, folder_name if folder_name else Path(video_path).stem)
 		if not os.path.exists(self.cache_path):
 			self.reset()
 		os.makedirs(self.cache_path, exist_ok=True)
@@ -656,6 +656,9 @@ class TextFrameAligner:
 						config.starting_server_port_to_check = 20081
 						config.starting_debug_port_to_check = 22224
 						baseUIChat = AIStudioUIChat(config)
+						if len(captions) < 15:
+							baseUIChat = GeminiUIChat(config)
+
 						match_scene = json_repair.loads(baseUIChat.quick_chat(
 							user_prompt=text,
 							system_prompt=system_prompt
@@ -818,7 +821,7 @@ class TextFrameAligner:
 		if not FYI:
 			FYI = ""
 
-		self.set_cache_dir(folder_name if folder_name else video_path)
+		self.set_cache_dir(video_path=video_path, folder_name=folder_name)
 		if copy_from_split_paths:
 			extract_scenes_json = self.copy_and_append_json(copy_from_split_paths, f'{self.cache_path}/extract_scenes.json', 'extract_scenes.json')
 			captions = self.copy_and_append_json(copy_from_split_paths, f'{self.cache_path}/caption_generation.json', 'caption_generation.json')
