@@ -338,6 +338,7 @@ class MultiTypeCaptionGenerator:
 		with ThreadPoolExecutor(max_workers=effective_workers) as executor:
 			futures = []
 			for type_id in range(effective_workers):
+				if type_id == 0: continue
 				future = executor.submit(self._worker, prompt, extract_scenes_json, temp_path, type_id)
 				futures.append(future)
 			

@@ -897,6 +897,8 @@ class TextFrameAligner:
 	def reset(self):
 		"""Reset cached data and free memory"""
 		logger_config.info("Resetting TextFrameAligner")
+		import glob;
+		[shutil.rmtree(f) for f in glob.glob('thread_id_*') if os.path.isdir(f)]
 		os.makedirs(TEMP_DIR, exist_ok=True)
 		# Get list of subfolders with access time
 		subfolders = [
