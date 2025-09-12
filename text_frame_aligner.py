@@ -702,12 +702,22 @@ class TextFrameAligner:
 				similarities = util.cos_sim(query_embedding, captions_embeddings)
 				frame_idx = similarities.argmax()
 
-				result.append({
-					"recap_sentence": curr_sent,
-					"frame_second": extract_scenes_json[frame_idx]["best_time"],
-					"frame_path": extract_scenes_json[frame_idx]["frame_path"][0],
-					"scene_caption": captions[frame_idx],
-				})
+				frame_path = extract_scenes_json[frame_idx]["frame_path"][0]
+
+				count = sum(1 for item in result if item["frame_path"] == frame_path)
+
+				if count < 2 or allow_dup:
+					result.append({
+						"recap_sentence": curr_sent,
+						"frame_second": extract_scenes_json[frame_idx]["best_time"],
+						"frame_path": frame_path,
+						"scene_caption": captions[frame_idx],
+					})
+				else:
+					shutil.copy2(cache_dir, cache_dir.replace(".json", ".json.bk"))
+					os.remove(cache_dir)
+					raise ValueError(f"duplicate frame:: {frame_path}")
+
 				# Save frame
 				output_path = os.path.join(self.cache_path, f"sentence_{i:02d}_frame_{frame_idx}.jpg")
 				shutil.copy2(extract_scenes_json[frame_idx]["frame_path"][0], output_path)
