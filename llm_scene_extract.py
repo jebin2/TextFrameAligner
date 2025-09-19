@@ -3,8 +3,10 @@ import subprocess
 import cv2
 from tqdm import tqdm
 from custom_logger import logger_config
+import common
 
 def run_transnetv2(video_path: str, frame_timestamps=None, start_from_sec=-1, end_from_sec=-1, skip_segment = [(None, None)]) -> list:
+	common.get_device()
 	transnetv2_dir = f'{os.getenv("PARENT_BASE_PATH")}/TransNetV2'
 	video_path = os.path.abspath(video_path)
 	scene_txt_path = f"{video_path}.scenes.txt"
@@ -12,7 +14,7 @@ def run_transnetv2(video_path: str, frame_timestamps=None, start_from_sec=-1, en
 	# Step 1: Run TransNetV2 using subprocess inside venv
 	python_path = os.path.expanduser("~/.pyenv/versions/TransNetV2_env/bin/python")
 	activate_cmd = f"{python_path} inference/transnetv2.py"
-	cmd = f'{activate_cmd} "{video_path}"'
+	cmd = f'CUDA_VISIBLE_DEVICES="" {activate_cmd} "{video_path}"'
 	subprocess.run(cmd, shell=True, check=True, cwd=transnetv2_dir, executable="/bin/bash")
 
 	# Step 2: Verify .scenes.txt was created

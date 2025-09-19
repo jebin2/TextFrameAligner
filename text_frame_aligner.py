@@ -610,8 +610,12 @@ class TextFrameAligner:
 				with open(cache_dir, "r") as f:
 					try:
 						match_scene = json.load(f)
-						match_scene[len(sentences)-1]
-						test = [sent["recap_sentence"] for sent in match_scene]
+						all_recap = [sent["recap_sentence"] for sent in match_scene]
+						try:
+							all_recap[len(sentences) - 1]
+						except:
+							if not common.is_same_sentence(" ".join(all_recap), " ".join(sentences)):
+								raise ValueError("Sentence not similar")
 					except: match_scene = None
 
 			if not match_scene:
@@ -663,11 +667,21 @@ class TextFrameAligner:
 							user_prompt=text,
 							system_prompt=system_prompt
 						))
-						match_scene[len(sentences)-1]
-						test = [sent["recap_sentence"] for sent in match_scene]
-					except: match_scene = None
+						all_recap = [sent["recap_sentence"] for sent in match_scene]
+						try:
+							all_recap[len(sentences) - 1]
+						except:
+							if not common.is_same_sentence(" ".join(all_recap), " ".join(sentences)):
+								raise ValueError("Sentence not similar")
+					except Exception as e:
+						match_scene = None
+						logger_config.warning(
+							f"Error occurred in scene matching:  {str(e)}\nTraceback:\n{traceback.format_exc()}"
+						)
+						match_scene = None
+						logger_config.info("wait before next try", seconds=60)
 					times -= 1
-					logger_config.info("wait before next try", seconds=60)
+
 				if not match_scene:
 					raise ValueError("failed to get match_scene.")
 				# Cache results

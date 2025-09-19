@@ -419,47 +419,75 @@ def extract_sharpest_scene_frame(cap, scene_start: float, scene_end: float, fps:
 		logger_config.warning(f"Failed to extract sharp non-black frame for scene {scene_start:.2f}-{scene_end:.2f}s")
 		return None, best_time, None
 
-def map_dialogues_to_scenes(scene_list: List[Tuple[float, float]], dialogues: List[dict],
-							video_path: str, frames_dir: str, cache_path: str) -> List[dict]:
-	"""
-	Map each dialogue to its corresponding scene and save a sharp non-black frame.
-	"""
+def map_dialogues_to_scenes(
+    scene_list: List[Tuple[float, float]], 
+    dialogues: List[dict],
+    video_path: str, 
+    frames_dir: str, 
+    cache_path: str
+) -> List[dict]:
+    """
+    Extract sharp frames for each scene, limit total frames to 700,
+    then map dialogues to remaining scenes.
+    """
+    import math
 
-	os.makedirs(frames_dir, exist_ok=True)
-	cap = cv2.VideoCapture(video_path)
-	fps = cap.get(cv2.CAP_PROP_FPS)
+    os.makedirs(frames_dir, exist_ok=True)
+    cap = cv2.VideoCapture(video_path)
+    fps = cap.get(cv2.CAP_PROP_FPS)
 
-	frames_extracted = 0
-	scene_dialogue_map = []
-	dino = FaceDINO(threshold=0.85)
-	person_detect = None #PersonDetectorYOLO()
+    dino = FaceDINO(threshold=0.85)
+    person_detect = None  # PersonDetectorYOLO()
 
-	for i, (scene_start, scene_end) in tqdm(enumerate(scene_list), total=len(scene_list), desc="Processing scenes"):
-		frame_path, best_time, best_frame = extract_sharpest_scene_frame(
-			cap, scene_start, scene_end, fps, frames_dir, frames_extracted, dino, person_detect
-		)
+    # ------------------------------
+    # Pass 1: Extract sharpest frames
+    # ------------------------------
+    extracted_scenes = []
+    frames_extracted = 0
 
-		if frame_path:
-			scene_dialogues = [
-				d for d in dialogues
-				if d['end'] >= scene_start and d['start'] <= scene_end
-			] if dialogues else []
+    for i, (scene_start, scene_end) in tqdm(
+        enumerate(scene_list), total=len(scene_list), desc="Extracting frames"
+    ):
+        frame_path, best_time, best_frame = extract_sharpest_scene_frame(
+            cap, scene_start, scene_end, fps, frames_dir, frames_extracted, dino, person_detect
+        )
 
-			scene_dialogue_map.append({
-				"scene_start": scene_start,
-				"scene_end": scene_end,
-				"best_time": best_time,
-				"frame_path": [frame_path],
-				"dialogues": scene_dialogues,
-				"dialogue": ""
-			})
+        if frame_path:
+            extracted_scenes.append((scene_start, scene_end, best_time, frame_path))
+            frames_extracted += 1
 
-			frames_extracted += 1
+    cap.release()
+    del dino
 
-	cap.release()
-	del dino
-	
-	return scene_dialogue_map
+    # ------------------------------
+    # Reduce to max 700 frames
+    # ------------------------------
+    max_frames = 700
+    if len(extracted_scenes) > max_frames:
+        step = math.ceil(len(extracted_scenes) / max_frames)
+        extracted_scenes = extracted_scenes[::step]
+
+    # ------------------------------
+    # Pass 2: Map dialogues
+    # ------------------------------
+    scene_dialogue_map = []
+    for scene_start, scene_end, best_time, frame_path in tqdm(
+        extracted_scenes, total=len(extracted_scenes), desc="Mapping dialogues"
+    ):
+        scene_dialogues = [
+            d for d in dialogues if d['end'] >= scene_start and d['start'] <= scene_end
+        ] if dialogues else []
+
+        scene_dialogue_map.append({
+            "scene_start": scene_start,
+            "scene_end": scene_end,
+            "best_time": best_time,
+            "frame_path": [frame_path],
+            "dialogues": scene_dialogues,
+            "dialogue": ""
+        })
+
+    return scene_dialogue_map
 
 
 def combine_consecutive_same_dialogues(scene_map: List[dict]) -> List[dict]:
