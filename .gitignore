@@ -232,3 +232,6 @@ search_google_ai_mode/
 meta_ui_chat/
 bing_ui_chat/
 mistral_ui_chat/
+temp_gemini_ui_chat/
+temp_aistudio_ui_handler_gemini_ui_chat/
+temp_aistudio_ui_handler/

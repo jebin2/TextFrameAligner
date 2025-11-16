@@ -10,7 +10,7 @@ import threading
 import time # Import time for skip logic
 from dotenv import load_dotenv
 import sys
-from chat_bot_ui_handler import GoogleAISearchChat, AIStudioUIChat, QwenUIChat, PerplexityUIChat, GeminiUIChat, GrokUIChat, MetaUIChat, CopilotUIChat, BingUIChat, MistralUIChat, PallyUIChat
+from chat_bot_ui_handler import GoogleAISearchChat, AIStudioUIChat, QwenUIChat, PerplexityUIChat, GeminiUIChat, GrokUIChat, MetaUIChat, CopilotUIChat, BingUIChat, MistralUIChat, PallyUIChat, MoonDream
 
 if os.path.exists(".env"):
 	load_dotenv()
@@ -22,7 +22,7 @@ class HandlerSkippedException(Exception):
 class MultiTypeCaptionGenerator:
 	def __init__(self, cache_path, num_types=12, FYI="", local_only=False, skip_duration_seconds=100):
 		self.cache_path = cache_path
-		self.sources = [GoogleAISearchChat, AIStudioUIChat, QwenUIChat, PerplexityUIChat, GeminiUIChat, GrokUIChat, MetaUIChat, CopilotUIChat, BingUIChat, MistralUIChat, PallyUIChat, GeminiUIChat, GoogleAISearchChat, BingUIChat, GeminiUIChat, GoogleAISearchChat, BingUIChat]
+		self.sources = [GoogleAISearchChat, AIStudioUIChat, QwenUIChat, PerplexityUIChat, GeminiUIChat, MoonDream, GrokUIChat, MetaUIChat, CopilotUIChat, BingUIChat, MistralUIChat, PallyUIChat, GeminiUIChat, GoogleAISearchChat, BingUIChat, GeminiUIChat, GoogleAISearchChat, BingUIChat]
 		self.num_types = len(self.sources) + 1
 		self.lock = Lock()  # for safely updating temp JSON
 		self.model_lock = Lock()
@@ -175,7 +175,7 @@ class MultiTypeCaptionGenerator:
 			frame_path = scene["frame_path"][0]
 			dialogue = scene["dialogue"]
 
-			print(f"⚡ Type {type_id} processing frame {idx+1}/{len(extract_scenes_json)}")
+			logger_config.success(f"⚡ Type {type_id} processing frame {idx+1}/{len(extract_scenes_json)}")
 
 			try:
 				result = None
@@ -347,6 +347,11 @@ class MultiTypeCaptionGenerator:
 					future.result()
 				except Exception as e:
 					logger_config.error(f"Worker failed with error: {e}")
+				except KeyboardInterrupt:
+					logger_config.warning("⚠️ Ctrl+C detected! Attempting to shutdown workers gracefully...")
+					# ThreadPoolExecutor does not automatically kill threads
+					for f in futures:
+						f.cancel()
 
 		temp_data = self._load_temp(temp_path)
 		captions = []

@@ -31,7 +31,7 @@ import traceback
 from chat_bot_ui_handler import AIStudioUIChat, GeminiUIChat
 import json_repair
 from browser_manager.browser_config import BrowserConfig
-from tqdm import tqdm
+import glob
 import subprocess, sys
 from dotenv import load_dotenv
 if os.path.exists(".env"):
@@ -46,7 +46,8 @@ class TextFrameAligner:
 				#  vision_model_name="google/siglip-base-patch16-224",  # Changed to SigLIP
 				 vision_model_name="google/siglip2-so400m-patch16-384",  # Changed to SigLIP
 				 max_workers=None):
-		
+
+		[shutil.rmtree(f) for f in glob.glob('thread_id_*') if os.path.isdir(f)]
 		self.device = "cuda" if common.is_gpu_available() else "cpu"
 		self.max_workers = max_workers or max(8, mp.cpu_count()-4)
 		logger_config.info("TextFrameAligner initialization started")
@@ -604,6 +605,7 @@ class TextFrameAligner:
 		"""Optimized scene extraction"""
 		match_scene = None
 		cache_dir = f"{self.cache_path}/{re.sub(r'[^a-zA-Z]', '', sentences[0][:10])}_match_scenes_online.json"
+		prompt_cache_dir = f"{self.cache_path}/{re.sub(r'[^a-zA-Z]', '', sentences[0][:10])}_match_scenes_prompt_online.json"
 		try:
 			if os.path.exists(cache_dir):
 				logger_config.info(f"Using cached match_scenes_online")
@@ -617,6 +619,10 @@ class TextFrameAligner:
 							if not common.is_same_sentence(" ".join(all_recap), " ".join(sentences)):
 								raise ValueError("Sentence not similar")
 					except: match_scene = None
+			else:
+				# Cache results
+				with open(cache_dir, "w") as f:
+					json.dump([], f, indent=4)
 
 			if not match_scene:
 				text = f"""Scene Captions:: {captions}
@@ -628,6 +634,8 @@ class TextFrameAligner:
 					with open("scene_matching_system_prompt.md", 'r') as file:
 						system_prompt = file.read()
 
+				with open(prompt_cache_dir, "w") as f:
+					json.dump(match_scene, f, indent=4)
 				# geminiWrapper = GeminiWrapper(system_instruction=system_prompt, model_name="gemini-2.0-flash")
 				# model_responses = geminiWrapper.send_message(text, schema=genai.types.Schema(
 				# 	type = genai.types.Type.OBJECT,
@@ -921,8 +929,6 @@ class TextFrameAligner:
 	def reset(self):
 		"""Reset cached data and free memory"""
 		logger_config.info("Resetting TextFrameAligner")
-		import glob;
-		[shutil.rmtree(f) for f in glob.glob('thread_id_*') if os.path.isdir(f)]
 		os.makedirs(TEMP_DIR, exist_ok=True)
 		# Get list of subfolders with access time
 		subfolders = [
@@ -932,10 +938,10 @@ class TextFrameAligner:
 		]
 
 		# If more than 100 subfolders, delete oldest ones
-		if len(subfolders) > 100:
+		if len(subfolders) > 20000:
 			# Sort by access time (oldest first)
 			subfolders.sort(key=lambda x: x[1])
-			folders_to_delete = subfolders[:-100]  # keep last 100
+			folders_to_delete = subfolders[:-1]  # keep last 200
 
 			for folder, _ in folders_to_delete:
 				folder_path = os.path.join(TEMP_DIR, folder)
