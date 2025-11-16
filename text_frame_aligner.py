@@ -605,7 +605,7 @@ class TextFrameAligner:
 		"""Optimized scene extraction"""
 		match_scene = None
 		cache_dir = f"{self.cache_path}/{re.sub(r'[^a-zA-Z]', '', sentences[0][:10])}_match_scenes_online.json"
-		prompt_cache_dir = f"{self.cache_path}/{re.sub(r'[^a-zA-Z]', '', sentences[0][:10])}_match_scenes_prompt_online.json"
+		prompt_cache_dir = f"{self.cache_path}/{re.sub(r'[^a-zA-Z]', '', sentences[0][:10])}_match_scenes_prompt_online.txt"
 		try:
 			if os.path.exists(cache_dir):
 				logger_config.info(f"Using cached match_scenes_online")
@@ -634,8 +634,8 @@ class TextFrameAligner:
 					with open("scene_matching_system_prompt.md", 'r') as file:
 						system_prompt = file.read()
 
-				with open(prompt_cache_dir, "w") as f:
-					json.dump(match_scene, f, indent=4)
+				with open(prompt_cache_dir, "w", encoding="utf-8") as f:
+					f.write(text)
 				# geminiWrapper = GeminiWrapper(system_instruction=system_prompt, model_name="gemini-2.0-flash")
 				# model_responses = geminiWrapper.send_message(text, schema=genai.types.Schema(
 				# 	type = genai.types.Type.OBJECT,
