@@ -692,7 +692,7 @@ class TextFrameAligner:
 					times -= 1
 
 				if not match_scene:
-					common.send_desktop_notification("Failed all match_scenes_online")
+					common.send_desktop_notification("Failed all match_scenes_online do it manually")
 					raise ValueError("failed to get match_scene.")
 				# Cache results
 				with open(cache_dir, "w") as f:
