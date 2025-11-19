@@ -22,7 +22,7 @@ class HandlerSkippedException(Exception):
 class MultiTypeCaptionGenerator:
 	def __init__(self, cache_path, num_types=12, FYI="", local_only=False, skip_duration_seconds=100):
 		self.cache_path = cache_path
-		self.sources = [GoogleAISearchChat, AIStudioUIChat, QwenUIChat, PerplexityUIChat, GeminiUIChat, MoonDream, GrokUIChat, MetaUIChat, CopilotUIChat, BingUIChat, MistralUIChat, PallyUIChat, GeminiUIChat, GoogleAISearchChat, BingUIChat, GeminiUIChat, GoogleAISearchChat, BingUIChat]
+		self.sources = [GoogleAISearchChat, QwenUIChat, PerplexityUIChat, GeminiUIChat, MoonDream, GrokUIChat, MetaUIChat, CopilotUIChat, BingUIChat, MistralUIChat, PallyUIChat, GeminiUIChat, GoogleAISearchChat, BingUIChat, GeminiUIChat, GoogleAISearchChat, BingUIChat]
 		self.num_types = len(self.sources) + 1
 		self.lock = Lock()  # for safely updating temp JSON
 		self.model_lock = Lock()
