@@ -297,3 +297,12 @@ def get_device(is_vision=False):
         torch.cuda.is_available = lambda: False
 
     return device
+
+def send_desktop_notification(text: str):
+    """
+    Send a desktop notification using notify-send on Linux.
+    """
+    try:
+        import subprocess
+        subprocess.run(["notify-send", text], check=True)
+    except : pass

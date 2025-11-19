@@ -682,6 +682,7 @@ class TextFrameAligner:
 							if not common.is_same_sentence(" ".join(all_recap), " ".join(sentences)):
 								raise ValueError("Sentence not similar")
 					except Exception as e:
+						common.send_desktop_notification("Failed match_scenes_online trying again")
 						match_scene = None
 						logger_config.warning(
 							f"Error occurred in scene matching:  {str(e)}\nTraceback:\n{traceback.format_exc()}"
@@ -691,6 +692,7 @@ class TextFrameAligner:
 					times -= 1
 
 				if not match_scene:
+					common.send_desktop_notification("Failed all match_scenes_online")
 					raise ValueError("failed to get match_scene.")
 				# Cache results
 				with open(cache_dir, "w") as f:
