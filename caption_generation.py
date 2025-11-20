@@ -1,13 +1,13 @@
 import os
 import json
 from moondream2 import Moondream2
-from concurrent.futures import ThreadPoolExecutor, TimeoutError
+from concurrent.futures import ThreadPoolExecutor
 from threading import Lock
 from custom_logger import logger_config
 import common
 import torch
 import threading
-import time
+import time # Import time for skip logic
 from dotenv import load_dotenv
 import sys
 from chat_bot_ui_handler import GoogleAISearchChat, AIStudioUIChat, QwenUIChat, PerplexityUIChat, GeminiUIChat, GrokUIChat, MetaUIChat, CopilotUIChat, BingUIChat, MistralUIChat, PallyUIChat, MoonDream
@@ -15,29 +15,27 @@ from chat_bot_ui_handler import GoogleAISearchChat, AIStudioUIChat, QwenUIChat, 
 if os.path.exists(".env"):
 	load_dotenv()
 
+# Define a custom exception for handler failures
 class HandlerSkippedException(Exception):
 	pass
 
-class WorkerTimeoutException(Exception):
-	pass
-
 class MultiTypeCaptionGenerator:
-	def __init__(self, cache_path, num_types=12, FYI="", local_only=False, skip_duration_seconds=100, worker_timeout_seconds=600):
+	def __init__(self, cache_path, num_types=12, FYI="", local_only=False, skip_duration_seconds=100):
 		self.cache_path = cache_path
 		self.sources = [GoogleAISearchChat, QwenUIChat, PerplexityUIChat, GeminiUIChat, MoonDream, GrokUIChat, MetaUIChat, CopilotUIChat, BingUIChat, MistralUIChat, PallyUIChat, GeminiUIChat, GoogleAISearchChat, BingUIChat, GeminiUIChat, GoogleAISearchChat, BingUIChat]
 		self.num_types = len(self.sources) + 1
-		self.lock = Lock()
+		self.lock = Lock()  # for safely updating temp JSON
 		self.model_lock = Lock()
-		self.handler_lock = Lock()
+		self.handler_lock = Lock() # NEW: Lock for handler statuses
 		self.model = None
 		self.FYI = FYI
 		self.local_only = local_only
-		self.skip_duration = skip_duration_seconds
-		self.worker_timeout = worker_timeout_seconds  # NEW: Per-worker timeout (default 10 mins)
-		self.worker_should_stop = {}  # NEW: Track which workers should stop
+		self.skip_duration = skip_duration_seconds # Duration to skip a failing handler
 
+		# Thread-local storage for models
 		self._thread_local = threading.local()
 
+		# --- NEW: Handler Ranking/Skipping State ---
 		self.handler_statuses = {
 			i: {
 				"is_skipped": False,
@@ -45,6 +43,7 @@ class MultiTypeCaptionGenerator:
 				"failure_count": 0,
 			} for i in range(num_types)
 		}
+		# -------------------------------------------
 
 	def _get_thread_model(self):
 		"""Get or create a model instance for the current thread"""
@@ -91,7 +90,7 @@ class MultiTypeCaptionGenerator:
 		"""Get next available index and mark it as in_progress atomically"""
 		with self.lock:
 			temp_data = self._load_temp(temp_path)
-			progress_start_time_timeout = 60 * 1 * 10
+			progress_start_time_timeout = 60 * 1 * 10  # e.g., 10 minutes
 
 			released = False
 			for i, entry in enumerate(temp_data):
@@ -109,42 +108,18 @@ class MultiTypeCaptionGenerator:
 			for i, entry in enumerate(temp_data):
 				if not entry["in_progress"] and not entry["processed"]:
 					temp_data[i]["in_progress"] = True
-					temp_data[i]["progress_start_time"] = time.time()
+					temp_data[i]["progress_start_time"] = time.time()  # Add timestamp
 					with open(temp_path, "w") as f:
 						json.dump(temp_data, f, indent=4)
 					print(f"🎯 Assigned index {i} to worker")
 					return i, temp_data
 			return None, temp_data
 
-	def _process_single_frame(self, idx, scene, prompt, type_id, thread_id):
-		"""Process a single frame with timeout protection"""
-		frame_path = scene["frame_path"][0]
-		dialogue = scene["dialogue"]
-		handler_key = type_id if self.local_only else (type_id % self.num_types)
-
-		result = None
-		if common.get_device() == "nocpu" and (type_id % self.num_types == 0 or self.local_only):
-			model = self._load_moondream2()
-			if model:
-				result = model.generate(frame_path, prompt)
-			else:
-				print(f"❌ Worker {type_id} - model not available")
-				result = None
-		else:
-			new_prompt = f"""{prompt} Also identify all the characters name in this frame. Keep your description to exactly 100 words or fewer.
-{self.FYI}"""
-			result = self.search_in_ui_type(type_id, new_prompt, frame_path, thread_id)
-
-		return result, dialogue, frame_path
-
 	def _worker(self, prompt, extract_scenes_json, temp_path, type_id):
 		processed_count = 0
 		thread_id = threading.current_thread().ident
 		handler_key = type_id if self.local_only else (type_id % self.num_types)
-		worker_start_time = time.time()  # NEW: Track worker start time
-		
 		print(f"🚀 Worker {type_id} (Handler {handler_key}) started on Thread {thread_id}")
-		print(f"⏱️  Worker {type_id} timeout set to {self.worker_timeout} seconds")
 		
 		if common.is_gpu_available() and not self.local_only:
 			try:
@@ -155,17 +130,8 @@ class MultiTypeCaptionGenerator:
 				print(f"⚠️ Could not set CUDA device for worker {type_id}: {e}")
 		
 		while True:
-			# NEW: Check if worker has exceeded time limit
-			elapsed_time = time.time() - worker_start_time
-			if elapsed_time > self.worker_timeout:
-				logger_config.warning(
-					f"⏰ Worker {type_id} exceeded timeout limit ({self.worker_timeout}s). "
-					f"Processed {processed_count} frames. Stopping gracefully."
-				)
-				break
-			
-			# Check if handler is skipped
-			if not self.local_only:
+			# --- NEW: Proactively check if the handler is skipped and pause the worker ---
+			if not self.local_only: # This logic only applies to non-local handlers
 				skip_time = None
 				with self.handler_lock:
 					status = self.handler_statuses[handler_key]
@@ -174,10 +140,12 @@ class MultiTypeCaptionGenerator:
 						if remaining_skip_time > 0:
 							skip_time = remaining_skip_time
 						else:
+							# If time is up, reactivate the handler
 							logger_config.info(f"Reactivating handler {handler_key} after skip period.")
 							status["is_skipped"] = False
 							status["failure_count"] = 0
 
+				# 🔑 do the waiting *after* releasing the lock
 				if skip_time:
 					logger_config.warning(
 						f"🟡 Worker {type_id} (Handler {handler_key}) is paused. "
@@ -185,84 +153,75 @@ class MultiTypeCaptionGenerator:
 					)
 					time.sleep(skip_time + 1)
 					continue
-			
-			print(f"🔍 Worker {type_id} looking for next frame... (Runtime: {elapsed_time:.1f}s)")
+				
+			print(f"🔍 Worker {type_id} looking for next frame...")
 			result_tuple = self._get_next_index(temp_path)
-			
 			if result_tuple[0] is None:
-				with self.lock:
+				with self.lock: # Lock to safely read the temp file
 					temp_data = self._load_temp(temp_path)
 				is_all_processed = all(entry["processed"] for entry in temp_data)
 				if is_all_processed:
 					print(f"✅ Worker {type_id} confirms all frames are processed. Exiting.")
-					break
+					break # The job is completely finished.
 				else:
 					print(f"⏳ Worker {type_id} - No available frames, but other workers are still busy. Waiting...")
-					time.sleep(5)
-					continue
+					time.sleep(5) # Wait for 5 seconds for another frame to become available.
+					continue # Go back to the top of the loop and check again.
 			
 			idx, temp_data = result_tuple
 			print(f"📋 Worker {type_id} got index {idx}")
 
 			scene = extract_scenes_json[idx]
-			
+			frame_path = scene["frame_path"][0]
+			dialogue = scene["dialogue"]
+
 			logger_config.success(f"⚡ Type {type_id} processing frame {idx+1}/{len(extract_scenes_json)}")
 
 			try:
-				# NEW: Use ThreadPoolExecutor to enforce timeout on frame processing
-				with ThreadPoolExecutor(max_workers=1) as executor:
-					future = executor.submit(
-						self._process_single_frame, 
-						idx, scene, prompt, type_id, thread_id
-					)
-					
-					try:
-						# Wait for result with timeout (e.g., 5 minutes per frame)
-						frame_timeout = min(300, self.worker_timeout - elapsed_time)  # 5 mins or remaining time
-						result, dialogue, frame_path = future.result(timeout=frame_timeout)
-						
-						print(f"📝 Type {type_id} got result for frame {idx}: {result}")
+				result = None
+				if common.get_device() == "nocpu" and (type_id % self.num_types == 0 or self.local_only):
+					model = self._load_moondream2()
+					if model:
+						result = model.generate(frame_path, prompt)
+					else:
+						print(f"❌ Worker {type_id} - model not available")
+						result = None
+				else:
+					new_prompt = f"""{prompt} Also identify all the characters name in this frame. Keep your description to exactly 100 words or fewer.
+	{self.FYI}"""
+					result = self.search_in_ui_type(type_id, new_prompt, frame_path, thread_id)
 
-						with self.lock:
-							temp_data = self._load_temp(temp_path)
-							
-							if result:
-								temp_data[idx]["caption"] = result.lower()
-								temp_data[idx]["processed"] = True
-								temp_data[idx]["dialogue"] = dialogue
-								temp_data[idx]["frame_path"] = frame_path
-								processed_count += 1
-								print(f"✅ Type {type_id} completed frame {idx+1} (Total: {processed_count})")
-							else:
-								temp_data[idx]["processed"] = False
-								print(f"❌ Type {type_id} failed frame {idx+1}")
-							
-							temp_data[idx]["in_progress"] = False
-							with open(temp_path, "w") as f:
-								json.dump(temp_data, f, indent=4)
-					
-					except TimeoutError:
-						logger_config.error(
-							f"⏰ Worker {type_id} frame {idx} timed out after {frame_timeout}s"
-						)
-						with self.lock:
-							temp_data = self._load_temp(temp_path)
-							temp_data[idx]["in_progress"] = False
-							temp_data[idx]["processed"] = False
-							with open(temp_path, "w") as f:
-								json.dump(temp_data, f, indent=4)
-						
-						# Cancel the future to clean up
-						future.cancel()
-			
-			except HandlerSkippedException:
-				print(f"🟡 Worker {type_id}'s handler is currently skipped. Releasing frame {idx} for another worker.")
+				print(f"📝 Type {type_id} got result for frame {idx}: {result}")
+
 				with self.lock:
 					temp_data = self._load_temp(temp_path)
+					
+					if result:
+						temp_data[idx]["caption"] = result.lower()
+						temp_data[idx]["processed"] = True
+						temp_data[idx]["dialogue"] = dialogue
+						temp_data[idx]["frame_path"] = frame_path
+						processed_count += 1
+						print(f"✅ Type {type_id} completed frame {idx+1} (Total: {processed_count})")
+					else:
+						# This case should now primarily be triggered by a genuine processing failure
+						# or if search_in_ui_type returns None after an exception.
+						temp_data[idx]["processed"] = False
+						print(f"❌ Type {type_id} failed frame {idx+1}")
+					
 					temp_data[idx]["in_progress"] = False
 					with open(temp_path, "w") as f:
 						json.dump(temp_data, f, indent=4)
-				time.sleep(5)
+			
+			except HandlerSkippedException:
+				# This block is now a secondary safeguard. The proactive check above should prevent it.
+				print(f"🟡 Worker {type_id}'s handler is currently skipped. Releasing frame {idx} for another worker.")
+				with self.lock:
+					temp_data = self._load_temp(temp_path)
+					temp_data[idx]["in_progress"] = False # Release the frame
+					with open(temp_path, "w") as f:
+						json.dump(temp_data, f, indent=4)
+				time.sleep(5) # Brief pause to prevent rapid re-grabbing if the proactive check fails
 			
 			except Exception as e:
 				print(f"💥 Worker {type_id} error on frame {idx}: {e}")
@@ -288,15 +247,13 @@ class MultiTypeCaptionGenerator:
 					with open(temp_path, "w") as f:
 						json.dump(temp_data, f, indent=4)
 		
-		# Cleanup
 		if hasattr(self._thread_local, 'model') and self._thread_local.model is not None:
 			print(f"🧹 Worker {type_id} cleaning up thread-local model")
 			del self._thread_local.model
 			if common.is_gpu_available():
 				torch.cuda.empty_cache()
 		
-		total_time = time.time() - worker_start_time
-		print(f"🏁 Worker {type_id} finished. Processed {processed_count} frames in {total_time:.1f}s.")
+		print(f"🏁 Worker {type_id} finished. Processed {processed_count} frames.")
 
 	def caption_generation(self, extract_scenes_json):
 		self.num_frames = len(extract_scenes_json)
@@ -326,8 +283,10 @@ class MultiTypeCaptionGenerator:
 			]
 			self._save_temp(temp_path, initial_data)
 		else:
+			# If the temp file exists, we are resuming.
 			temp_data = self._load_temp(temp_path)
 			
+			# Ensure the temp file length matches the input scenes.
 			if len(temp_data) != self.num_frames:
 				logger_config.warning(f"⚠️  Temp file has {len(temp_data)} frames, expected {self.num_frames}. Reinitializing...")
 				initial_data = [
@@ -342,19 +301,22 @@ class MultiTypeCaptionGenerator:
 				]
 				self._save_temp(temp_path, initial_data)
 			else:
+				# *** START OF THE FIX ***
+				# Reset any "in_progress" flags from a previous crashed run.
 				completed_count = 0
 				reset_count = 0
 				
 				for i, data in enumerate(temp_data):
 					if data["in_progress"]:
-						data["in_progress"] = False
-						data["processed"] = False
-						data["caption"] = None
+						data["in_progress"] = False # Reset the flag
+						data["processed"] = False # Ensure it's not marked as processed
+						data["caption"] = None    # Clear any partial caption
 						reset_count += 1
 					
 					if data["processed"] and data["caption"]:
 						completed_count += 1
 					
+					# Always update dialogue and frame_path in case the source changed
 					if i < len(extract_scenes_json):
 						data["dialogue"] = extract_scenes_json[i]["dialogue"]
 						data["frame_path"] = extract_scenes_json[i]["frame_path"][0]
@@ -364,13 +326,12 @@ class MultiTypeCaptionGenerator:
 
 				self._save_temp(temp_path, temp_data)
 				logger_config.info(f"📋 Resuming: {completed_count} frames already completed.")
+				# *** END OF THE FIX ***
 
 		prompt = "Describe what is happening in this video frame as if you're telling a story. Focus on the main subjects, their actions, the setting, and any important details."
 
 		effective_workers = 1 if self.local_only else self.num_types
 		print(f"🔧 Using {effective_workers} workers (local_only: {self.local_only})")
-		print(f"⏱️  Worker timeout: {self.worker_timeout} seconds")
-		
 		if self.local_only:
 			print(f"💾 Memory optimization: Using 1 thread to avoid loading multiple models")
 
@@ -388,6 +349,7 @@ class MultiTypeCaptionGenerator:
 					logger_config.error(f"Worker failed with error: {e}")
 				except KeyboardInterrupt:
 					logger_config.warning("⚠️ Ctrl+C detected! Attempting to shutdown workers gracefully...")
+					# ThreadPoolExecutor does not automatically kill threads
 					for f in futures:
 						f.cancel()
 
@@ -419,19 +381,23 @@ class MultiTypeCaptionGenerator:
 		from browser_manager.browser_config import BrowserConfig
 		import os
 		
-		handler_key = (type_id - 1) % self.num_types
+		# Fix: Use consistent handler indexing
+		handler_key = (type_id - 1) % self.num_types  # Map type_id 1-12 to handler 0-11
 		
+		# --- Check handler status before proceeding ---
 		with self.handler_lock:
 			status = self.handler_statuses[handler_key]
 			if status["is_skipped"] and time.time() < status["skip_until"]:
 				logger_config.warning(f"Handler {handler_key} is currently skipped. Skipping this task.")
 				raise HandlerSkippedException(f"Handler {handler_key} is skipped.")
+			# If skip time has passed, reset the status
 			elif status["is_skipped"]:
 				logger_config.info(f"Reactivating handler {handler_key} after skip period.")
 				status["is_skipped"] = False
 				status["failure_count"] = 0
 
-		source = self.sources[handler_key]
+		
+		source = self.sources[handler_key]  # Remove the -1 since handler_key is already adjusted
 
 		try:
 			config = BrowserConfig()
@@ -459,51 +425,46 @@ class MultiTypeCaptionGenerator:
 			if "Sources\nhelp" in result:
 				result = result[:result.index("Sources\nhelp\n")]
 
+			# Reset failure count on success
 			with self.handler_lock:
 				self.handler_statuses[handler_key]["failure_count"] = 0
 			return result
 
 		except Exception as e:
 			logger_config.error(f"Type {type_id} (Handler {handler_key}) failed processing: {e}")
+			# Penalize the handler on failure
 			with self.handler_lock:
 				status = self.handler_statuses[handler_key]
 				status["failure_count"] += 1
+				# Skip the handler after 3 consecutive failures
 				if status["failure_count"] >= 3:
 					status["is_skipped"] = True
 					status["skip_until"] = time.time() + self.skip_duration
 					logger_config.error(f"Handler {handler_key} failed {status['failure_count']} times. Skipping for {self.skip_duration} seconds.")
 			
+			# Re-raise the exception so the worker can handle it appropriately
 			raise
 
 		return None
 
+# Usage example and main execution
 if __name__ == "__main__":
 	print(sys.argv)
 	extract_scenes_path = sys.argv[1]
 	cache_path = sys.argv[2]
 	
+	# Set default values for FYI and local_only
 	FYI = ""
 	if len(sys.argv) > 3:
 		FYI = sys.argv[3]
 
 	local_only = False
 	if len(sys.argv) > 4:
+		# Convert the string argument to a boolean
 		local_only = sys.argv[4].lower() in ('true', '1', 't')
 
-	# NEW: Optional worker timeout argument (default 600 seconds = 10 minutes)
-	worker_timeout = 600
-	if len(sys.argv) > 5:
-		try:
-			worker_timeout = int(sys.argv[5])
-		except ValueError:
-			print(f"⚠️  Invalid worker timeout value. Using default: {worker_timeout}s")
-
-	captionGen = MultiTypeCaptionGenerator(
-		cache_path=cache_path, 
-		FYI=FYI, 
-		local_only=local_only,
-		worker_timeout_seconds=worker_timeout
-	)
+	# Example usage
+	captionGen = MultiTypeCaptionGenerator(cache_path=cache_path, FYI=FYI, local_only=local_only)
 
 	with open(extract_scenes_path, "r") as f:
 		data = json.load(f)
