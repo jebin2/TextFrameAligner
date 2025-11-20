@@ -262,7 +262,7 @@ class MultiTypeCaptionGenerator:
 		os.makedirs(partial_dir, exist_ok=True)
 		temp_path = os.path.join(partial_dir, "temp_progress.json")
 		temp_data = self._load_temp(temp_path)
-		if len([cap for cap in temp_data if cap["processed"]]) != 0:
+		if len([cap for cap in temp_data if not cap["processed"]]) != 0:
 			common.remove_file(cache_dir)
 
 		if os.path.exists(cache_dir):
@@ -357,7 +357,7 @@ class MultiTypeCaptionGenerator:
 						f.cancel()
 
 		temp_data = self._load_temp(temp_path)
-		if len([cap for cap in temp_data if cap["processed"]]) != 0:
+		if len([cap for cap in temp_data if not cap["processed"]]) != 0:
 			raise ValueError("Exited without completed.")
 		captions = []
 
