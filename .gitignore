@@ -235,3 +235,4 @@ mistral_ui_chat/
 temp_gemini_ui_chat/
 temp_aistudio_ui_handler_gemini_ui_chat/
 temp_aistudio_ui_handler/
+thread_id*/
