@@ -858,6 +858,8 @@ class TextFrameAligner:
 		self.set_cache_dir(video_path=video_path, folder_name=folder_name)
 		if copy_from_split_paths:
 			extract_scenes_json = self.copy_and_append_json(copy_from_split_paths, f'{self.cache_path}/extract_scenes.json', 'extract_scenes.json')
+			common.create_directory(f'{self.cache_path}/partial_captions')
+			self.copy_and_append_json(copy_from_split_paths, f'{self.cache_path}/partial_captions/temp_progress.json', 'partial_captions/temp_progress.json')
 			captions = self.copy_and_append_json(copy_from_split_paths, f'{self.cache_path}/caption_generation.json', 'caption_generation.json')
 		else:
 			if not frame_paths and not video_path.endswith((".jpg", ".png", ".jpeg")):
