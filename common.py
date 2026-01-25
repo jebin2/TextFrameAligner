@@ -306,3 +306,39 @@ def send_desktop_notification(text: str):
         import subprocess
         subprocess.run(["notify-send", text], check=True)
     except : pass
+
+def get_neko_additional_flags(neko_base_path, config):
+    additional_flags = []
+    additional_flags.append(f'-v {neko_base_path}:{config.neko_attach_folder}')
+    additional_flags.append(f'-v {get_chrome_policies_json_path()}:/etc/opt/chrome/policies/managed/policies.json')
+    return additional_flags
+
+def get_chrome_policies_json_path():
+    """
+    Returns the path to policies.json, downloading it if it doesn't exist.
+    """
+    import requests
+    local_path = f"{os.getenv('ALL_PROJECT_BASE_PATH')}/neko-apps/chrome-remote-debug/policies.json"
+    if file_exists(local_path):
+        return local_path
+
+    target_path = f"temp_dir/policies.json"
+    if file_exists(target_path):
+        remove_file(target_path)
+    
+    url = "https://raw.githubusercontent.com/jebin2/neko-apps/c4c2019a464b0831d019014b8ed86082fba77975/chrome-remote-debug/policies.json"
+    logger_config.info(f"Downloading policies.json from {url}")
+    
+    try:
+        response = requests.get(url)
+        if response.status_code == 200:
+            with open(target_path, 'wb') as f:
+                f.write(response.content)
+            logger_config.success(f"Downloaded policies.json to {target_path}")
+            return target_path
+        else:
+            logger_config.error(f"Failed to download policies.json. Status code: {response.status_code}")
+            return None
+    except Exception as e:
+        logger_config.error(f"Error downloading policies.json: {e}")
+        return None

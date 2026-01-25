@@ -1,3 +1,6 @@
+from jebin_lib import load_env
+load_env()
+
 import os
 import json
 from moondream2 import Moondream2
@@ -8,12 +11,8 @@ import common
 import torch
 import threading
 import time # Import time for skip logic
-from dotenv import load_dotenv
 import sys
 from chat_bot_ui_handler import GoogleAISearchChat, AIStudioUIChat, QwenUIChat, PerplexityUIChat, GeminiUIChat, GrokUIChat, MetaUIChat, CopilotUIChat, BingUIChat, MistralUIChat, PallyUIChat, MoonDream
-
-if os.path.exists(".env"):
-	load_dotenv()
 
 # Define a custom exception for handler failures
 class HandlerSkippedException(Exception):
@@ -413,11 +412,9 @@ class MultiTypeCaptionGenerator:
 
 			if source.__name__ == "MetaUIChat" or source.__name__ == "AIStudioUIChat":
 				neko_base_path = "/".join(file_path.split("/")[:5])
-				neko_file_path = "/home/neko/Downloads/" + "/".join(file_path.split("/")[5:])
-				additional_flags = []
-				additional_flags.append(f'-v {neko_base_path}:/home/neko/Downloads')
-				additional_flags.append(f'-v {os.getenv("PARENT_BASE_PATH")}/browser_manager/policies.json:/etc/opt/chrome/policies/managed/policies.json')
-				config.additionl_docker_flag = ' '.join(additional_flags)
+				neko_file_path = "/".join(file_path.split("/")[5:])
+				# Set up additional docker flags
+				config.additionl_docker_flag = ' '.join(common.get_neko_additional_flags(neko_base_path, config))
 
 			src_obj = source(config=config)
 			result = src_obj.quick_chat(user_prompt=prompt, file_path=neko_file_path)

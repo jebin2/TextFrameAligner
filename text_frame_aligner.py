@@ -1,3 +1,6 @@
+from jebin_lib import load_env
+load_env()
+
 import warnings
 warnings.filterwarnings("ignore", category=UserWarning)
 warnings.filterwarnings("ignore", category=FutureWarning)
@@ -33,9 +36,6 @@ import json_repair
 from browser_manager.browser_config import BrowserConfig
 import glob
 import subprocess, sys
-from dotenv import load_dotenv
-if os.path.exists(".env"):
-	load_dotenv()
 
 TEMP_DIR = os.path.abspath("temp_dir")
 
@@ -730,7 +730,7 @@ class TextFrameAligner:
 
 				count = sum(1 for item in result if item["frame_path"] == frame_path)
 
-				if count < 2 or allow_dup:
+				if count < 4 or allow_dup:
 					result.append({
 						"recap_sentence": curr_sent,
 						"frame_second": extract_scenes_json[frame_idx]["best_time"],

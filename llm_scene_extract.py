@@ -7,7 +7,7 @@ import common
 
 def run_transnetv2(video_path: str, frame_timestamps=None, start_from_sec=-1, end_from_sec=-1, skip_segment = [(None, None)]) -> list:
 	common.get_device()
-	transnetv2_dir = f'{os.getenv("PARENT_BASE_PATH")}/TransNetV2'
+	transnetv2_dir = f'{os.getenv("ALL_PROJECT_BASE_PATH")}/TransNetV2'
 	video_path = os.path.abspath(video_path)
 	scene_txt_path = f"{video_path}.scenes.txt"
 

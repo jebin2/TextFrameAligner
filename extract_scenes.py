@@ -383,10 +383,13 @@ def extract_sharpest_scene_frame(cap, scene_start: float, scene_end: float, fps:
 
 	sharpness_func = sharpness_functions.get(sharpness_method, composite_sharpness_score)
 
-	for f in range(start_frame, end_frame, step):
-		cap.set(cv2.CAP_PROP_POS_FRAMES, f)
+	cap.set(cv2.CAP_PROP_POS_FRAMES, start_frame)
+	for current in range(start_frame, end_frame):
 		ret, frame = cap.read()
 		if not ret:
+			continue
+
+		if current % step != 0:
 			continue
 
 		if person_detect is not None and not person_detect.has_person(frame):
@@ -407,7 +410,7 @@ def extract_sharpest_scene_frame(cap, scene_start: float, scene_end: float, fps:
 		if var > best_var:
 			best_var = var
 			best_frame = frame.copy()
-			best_time = f / fps
+			best_time = current / fps
 
 	if best_frame is not None:
 		frame_filename = f"scene_{frame_index:04d}_at_{best_time:.2f}s.jpg"

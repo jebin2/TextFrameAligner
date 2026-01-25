@@ -104,7 +104,7 @@ if __name__ == "__main__":
 
 	dino = FaceDINO(threshold=0.85)
 
-	path = f'{os.getenv("PARENT_BASE_PATH")}/CaptionCreator/reuse/comic_review_Clementine Chapter 02/split_0007'
+	path = ""
 	frame_id = 0
 	for file in sorted([file for file in os.listdir(path) if "(" in file]):
 		dup, sim = dino.is_duplicate(f"{path}/{file}")
