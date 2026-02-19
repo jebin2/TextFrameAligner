@@ -665,8 +665,6 @@ class TextFrameAligner:
 				while times > 0 and match_scene is None:
 					try:
 						config = BrowserConfig()
-						config.starting_server_port_to_check = 20081
-						config.starting_debug_port_to_check = 22224
 						baseUIChat = AIStudioUIChat(config)
 						if len(captions) < 15:
 							baseUIChat = GeminiUIChat(config)
@@ -886,14 +884,33 @@ class TextFrameAligner:
 		common.manage_gpu(action="clear_cache")
 
 		# Step 3: Generate captions
-		subprocess.run([
+		import signal as _signal
+		_caption_proc = subprocess.Popen([
 			sys.executable,
 			"caption_generation.py",
 			f"{self.cache_path}/extract_scenes.json",
 			self.cache_path,
 			FYI,
-			str(local_only)  # Convert boolean to string
-		], check=True, preexec_fn=os.setsid, env={**os.environ, 'PYTHONUNBUFFERED': '1', 'CUDA_LAUNCH_BLOCKING': '1', 'USE_CPU_IF_POSSIBLE': 'true'})
+			str(local_only)
+		], preexec_fn=os.setsid, env={**os.environ, 'PYTHONUNBUFFERED': '1', 'CUDA_LAUNCH_BLOCKING': '1', 'USE_CPU_IF_POSSIBLE': 'true'})
+
+		def _forward(signum, frame):
+			try:
+				os.killpg(os.getpgid(_caption_proc.pid), signum)
+			except ProcessLookupError:
+				pass
+			# Raise in the parent too so its call stack unwinds normally.
+			raise KeyboardInterrupt()
+
+		_old_sigint  = _signal.signal(_signal.SIGINT,  _forward)
+		_old_sigterm = _signal.signal(_signal.SIGTERM, _forward)
+		try:
+			_caption_proc.wait()
+		finally:
+			_signal.signal(_signal.SIGINT,  _old_sigint)
+			_signal.signal(_signal.SIGTERM, _old_sigterm)
+		if _caption_proc.returncode != 0:
+			raise subprocess.CalledProcessError(_caption_proc.returncode, _caption_proc.args)
 		with open(os.path.join(self.cache_path, "caption_generation.json"), 'r') as f:
 			captions = json.load(f)
 		common.manage_gpu(action="clear_cache")

@@ -14,6 +14,14 @@ import time # Import time for skip logic
 import sys
 from chat_bot_ui_handler import GoogleAISearchChat, AIStudioUIChat, QwenUIChat, PerplexityUIChat, GeminiUIChat, GrokUIChat, MetaUIChat, CopilotUIChat, BingUIChat, MistralUIChat, PallyUIChat, MoonDream
 
+# Serialize logger output so multi-line entries (message + separator) from
+# different threads never interleave.
+_log_lock = Lock()
+
+def _log(level, msg):
+	with _log_lock:
+		getattr(logger_config, level)(msg)
+
 # Define a custom exception for handler failures
 class HandlerSkippedException(Exception):
 	pass
@@ -40,7 +48,7 @@ class MultiTypeCaptionGenerator:
 				"is_skipped": False,
 				"skip_until": 0,
 				"failure_count": 0,
-			} for i in range(num_types)
+			} for i in range(len(self.sources))
 		}
 		# -------------------------------------------
 
@@ -49,22 +57,22 @@ class MultiTypeCaptionGenerator:
 		if not hasattr(self._thread_local, 'model') or self._thread_local.model is None:
 			with self.model_lock:
 				thread_id = threading.current_thread().ident
-				print(f"🔧 Thread {thread_id} initializing model...")
+				_log('info', f"[Thread {thread_id}] Initializing model...")
 				try:
 					if common.is_gpu_available():
 						torch.cuda.empty_cache()
 						torch.cuda.synchronize()
-					
+
 					os.environ["PYTORCH_CUDA_ALLOC_CONF"] = "max_split_size_mb:512"
 					os.environ["CUDA_LAUNCH_BLOCKING"] = "1"
-					
+
 					self._thread_local.model = Moondream2()
-					print(f"✅ Thread {threading.current_thread().ident} model initialized")
+					_log('success', f"[Thread {thread_id}] Model initialized")
 				except Exception as e:
-					print(f"❌ Thread {thread_id} model init failed: {e}")
+					_log('error', f"[Thread {thread_id}] Model init failed: {e}")
 					self._thread_local.model = None
 					raise
-		
+
 		return self._thread_local.model
 
 	def _load_moondream2(self):
@@ -98,7 +106,7 @@ class MultiTypeCaptionGenerator:
 						entry["in_progress"] = False
 						entry["progress_start_time"] = None
 						released = True
-						print(f"⏪ Releasing stale index {i}")
+						_log('warning', f"[Index {i}] Releasing stale in-progress frame")
 
 			if released:
 				with open(temp_path, "w") as f:
@@ -110,23 +118,22 @@ class MultiTypeCaptionGenerator:
 					temp_data[i]["progress_start_time"] = time.time()  # Add timestamp
 					with open(temp_path, "w") as f:
 						json.dump(temp_data, f, indent=4)
-					print(f"🎯 Assigned index {i} to worker")
 					return i, temp_data
 			return None, temp_data
 
 	def _worker(self, prompt, extract_scenes_json, temp_path, type_id):
 		processed_count = 0
 		thread_id = threading.current_thread().ident
-		handler_key = type_id if self.local_only else (type_id % self.num_types)
-		print(f"🚀 Worker {type_id} (Handler {handler_key}) started on Thread {thread_id}")
-		
+		handler_key = type_id if self.local_only else ((type_id - 1) % len(self.sources))
+		_log('info', f"[W{type_id}|H{handler_key}] Started on thread {thread_id}")
+
 		if common.is_gpu_available() and not self.local_only:
 			try:
 				device_id = type_id % torch.cuda.device_count()
 				torch.cuda.set_device(device_id)
-				print(f"📍 Worker {type_id} using GPU {device_id}")
+				_log('info', f"[W{type_id}] Using GPU {device_id}")
 			except Exception as e:
-				print(f"⚠️ Could not set CUDA device for worker {type_id}: {e}")
+				_log('warning', f"[W{type_id}] Could not set CUDA device: {e}")
 		
 		while True:
 			# --- NEW: Proactively check if the handler is skipped and pause the worker ---
@@ -140,57 +147,50 @@ class MultiTypeCaptionGenerator:
 							skip_time = remaining_skip_time
 						else:
 							# If time is up, reactivate the handler
-							logger_config.info(f"Reactivating handler {handler_key} after skip period.")
+							_log('info', f"[H{handler_key}] Reactivating after skip period")
 							status["is_skipped"] = False
 							status["failure_count"] = 0
 
 				# 🔑 do the waiting *after* releasing the lock
 				if skip_time:
-					logger_config.warning(
-						f"🟡 Worker {type_id} (Handler {handler_key}) is paused. "
-						f"Handler is skipped for another {skip_time:.1f} seconds."
-					)
+					_log('warning', f"[W{type_id}|H{handler_key}] Paused — handler skipped for {skip_time:.0f}s more")
 					time.sleep(skip_time + 1)
 					continue
-				
-			print(f"🔍 Worker {type_id} looking for next frame...")
+
 			result_tuple = self._get_next_index(temp_path)
 			if result_tuple[0] is None:
-				with self.lock: # Lock to safely read the temp file
+				with self.lock:
 					temp_data = self._load_temp(temp_path)
 				is_all_processed = all(entry["processed"] for entry in temp_data)
 				if is_all_processed:
-					print(f"✅ Worker {type_id} confirms all frames are processed. Exiting.")
-					break # The job is completely finished.
+					_log('success', f"[W{type_id}] All frames processed. Exiting.")
+					break
 				else:
-					print(f"⏳ Worker {type_id} - No available frames, but other workers are still busy. Waiting...")
-					time.sleep(5) # Wait for 5 seconds for another frame to become available.
-					continue # Go back to the top of the loop and check again.
-			
+					time.sleep(5)
+					continue
+
 			idx, temp_data = result_tuple
-			print(f"📋 Worker {type_id} got index {idx}")
 
 			scene = extract_scenes_json[idx]
 			frame_path = scene["frame_path"][0]
 			dialogue = scene["dialogue"]
 
-			logger_config.success(f"⚡ Type {type_id} processing frame {idx+1}/{len(extract_scenes_json)}")
+			_log('info', f"[W{type_id}] Processing frame {idx+1}/{len(extract_scenes_json)}")
 
 			try:
 				result = None
-				if common.get_device() == "nocpu" and (type_id % self.num_types == 0 or self.local_only):
+				if common.get_device() == "cuda" and (type_id % self.num_types == 0 or self.local_only):
 					model = self._load_moondream2()
 					if model:
 						result = model.generate(frame_path, prompt)
 					else:
-						print(f"❌ Worker {type_id} - model not available")
+						_log('error', f"[W{type_id}] Model not available")
 						result = None
 				else:
 					new_prompt = f"""{prompt} Also identify all the characters name in this frame. Keep your description to exactly 100 words or fewer.
 	{self.FYI}"""
 					result = self.search_in_ui_type(type_id, new_prompt, frame_path, thread_id)
 
-				print(f"📝 Type {type_id} got result for frame {idx}: {result}")
 
 				with self.lock:
 					temp_data = self._load_temp(temp_path)
@@ -201,12 +201,10 @@ class MultiTypeCaptionGenerator:
 						temp_data[idx]["dialogue"] = dialogue
 						temp_data[idx]["frame_path"] = frame_path
 						processed_count += 1
-						print(f"✅ Type {type_id} completed frame {idx+1} (Total: {processed_count})")
+						_log('success', f"[W{type_id}] Frame {idx+1}/{len(extract_scenes_json)} done (session total: {processed_count})")
 					else:
-						# This case should now primarily be triggered by a genuine processing failure
-						# or if search_in_ui_type returns None after an exception.
 						temp_data[idx]["processed"] = False
-						print(f"❌ Type {type_id} failed frame {idx+1}")
+						_log('error', f"[W{type_id}] Frame {idx+1} returned no result")
 					
 					temp_data[idx]["in_progress"] = False
 					with open(temp_path, "w") as f:
@@ -214,7 +212,7 @@ class MultiTypeCaptionGenerator:
 			
 			except HandlerSkippedException:
 				# This block is now a secondary safeguard. The proactive check above should prevent it.
-				print(f"🟡 Worker {type_id}'s handler is currently skipped. Releasing frame {idx} for another worker.")
+				_log('warning', f"[W{type_id}] Handler skipped — releasing frame {idx}")
 				with self.lock:
 					temp_data = self._load_temp(temp_path)
 					temp_data[idx]["in_progress"] = False # Release the frame
@@ -223,12 +221,12 @@ class MultiTypeCaptionGenerator:
 				time.sleep(5) # Brief pause to prevent rapid re-grabbing if the proactive check fails
 			
 			except Exception as e:
-				print(f"💥 Worker {type_id} error on frame {idx}: {e}")
+				_log('error', f"[W{type_id}] Error on frame {idx}: {e}")
 				
 				if ("meta tensor" in str(e) or "Cannot copy out" in str(e) or 
 					"meta is not on the expected device" in str(e) or 
 					"CUDA" in str(e) or "device" in str(e).lower()):
-					print(f"🔄 Worker {type_id} detected device/model error, clearing thread-local model")
+					_log('warning', f"[W{type_id}] Device/model error detected — clearing thread-local model")
 					if hasattr(self._thread_local, 'model'):
 						try:
 							del self._thread_local.model
@@ -247,12 +245,20 @@ class MultiTypeCaptionGenerator:
 						json.dump(temp_data, f, indent=4)
 		
 		if hasattr(self._thread_local, 'model') and self._thread_local.model is not None:
-			print(f"🧹 Worker {type_id} cleaning up thread-local model")
+			_log('info', f"[W{type_id}] Cleaning up thread-local model")
 			del self._thread_local.model
 			if common.is_gpu_available():
 				torch.cuda.empty_cache()
 		
-		print(f"🏁 Worker {type_id} finished. Processed {processed_count} frames.")
+		if hasattr(self._thread_local, 'handler') and self._thread_local.handler is not None:
+			_log('info', f"[W{type_id}] Cleaning up thread-local handler")
+			try:
+				self._thread_local.handler.cleanup()
+			except:
+				pass
+			self._thread_local.handler = None
+
+		_log('info', f"[W{type_id}] Finished — processed {processed_count} frames this session")
 
 	def caption_generation(self, extract_scenes_json):
 		self.num_frames = len(extract_scenes_json)
@@ -265,11 +271,11 @@ class MultiTypeCaptionGenerator:
 			common.remove_file(cache_dir)
 
 		if os.path.exists(cache_dir):
-			logger_config.info(f"✅ Using cached captions for {len(extract_scenes_json)} frames")
+			_log('info', f"Using cached captions for {len(extract_scenes_json)} frames")
 			with open(cache_dir, "r") as f:
 				return json.load(f)
 
-		logger_config.info(f"🚀 Starting multi-type caption generation for {len(extract_scenes_json)} frames")
+		_log('info', f"Starting caption generation for {len(extract_scenes_json)} frames")
 		
 		if not os.path.exists(temp_path):
 			initial_data = [
@@ -290,7 +296,7 @@ class MultiTypeCaptionGenerator:
 			
 			# Ensure the temp file length matches the input scenes.
 			if len(temp_data) != self.num_frames:
-				logger_config.warning(f"⚠️  Temp file has {len(temp_data)} frames, expected {self.num_frames}. Reinitializing...")
+				_log('warning', f"Temp file has {len(temp_data)} frames, expected {self.num_frames} — reinitializing")
 				initial_data = [
 					{
 						"in_progress": False, 
@@ -324,18 +330,18 @@ class MultiTypeCaptionGenerator:
 						data["frame_path"] = extract_scenes_json[i]["frame_path"][0]
 
 				if reset_count > 0:
-					logger_config.info(f"🔧 Found and reset {reset_count} stale 'in_progress' frames from a previous run.")
+					_log('info', f"Reset {reset_count} stale in-progress frames from previous run")
 
 				self._save_temp(temp_path, temp_data)
-				logger_config.info(f"📋 Resuming: {completed_count} frames already completed.")
+				_log('info', f"Resuming — {completed_count}/{self.num_frames} frames already done")
 				# *** END OF THE FIX ***
 
 		prompt = "Describe what is happening in this video frame as if you're telling a story. Focus on the main subjects, their actions, the setting, and any important details."
 
 		effective_workers = 1 if self.local_only else self.num_types
-		print(f"🔧 Using {effective_workers} workers (local_only: {self.local_only})")
+		_log('info', f"Launching {effective_workers} worker(s) (local_only={self.local_only})")
 		if self.local_only:
-			print(f"💾 Memory optimization: Using 1 thread to avoid loading multiple models")
+			_log('info', "Memory optimization: single thread to avoid loading multiple models")
 
 		with ThreadPoolExecutor(max_workers=effective_workers) as executor:
 			futures = []
@@ -348,9 +354,9 @@ class MultiTypeCaptionGenerator:
 				try:
 					future.result()
 				except Exception as e:
-					logger_config.error(f"Worker failed with error: {e}")
+					_log('error', f"Worker failed: {e}")
 				except KeyboardInterrupt:
-					logger_config.warning("⚠️ Ctrl+C detected! Attempting to shutdown workers gracefully...")
+					_log('warning', "Ctrl+C detected — attempting graceful shutdown")
 					# ThreadPoolExecutor does not automatically kill threads
 					for f in futures:
 						f.cancel()
@@ -369,7 +375,7 @@ class MultiTypeCaptionGenerator:
 		with open(cache_dir, "w") as f:
 			json.dump(captions, f, indent=4)
 			
-		logger_config.info(f"✅ Saved all captions to {cache_dir}")
+		_log('success', f"All captions saved to {cache_dir}")
 		
 		if hasattr(self, 'model') and self.model:
 			del self.model
@@ -386,38 +392,70 @@ class MultiTypeCaptionGenerator:
 		import os
 		
 		# Fix: Use consistent handler indexing
-		handler_key = (type_id - 1) % self.num_types  # Map type_id 1-12 to handler 0-11
+		handler_key = (type_id - 1) % len(self.sources)
 		
 		# --- Check handler status before proceeding ---
 		with self.handler_lock:
 			status = self.handler_statuses[handler_key]
 			if status["is_skipped"] and time.time() < status["skip_until"]:
-				logger_config.warning(f"Handler {handler_key} is currently skipped. Skipping this task.")
+				_log('warning', f"[W{type_id}|H{handler_key}] Handler skipped — skipping task")
 				raise HandlerSkippedException(f"Handler {handler_key} is skipped.")
 			# If skip time has passed, reset the status
 			elif status["is_skipped"]:
-				logger_config.info(f"Reactivating handler {handler_key} after skip period.")
+				_log('info', f"[H{handler_key}] Reactivating after skip period")
 				status["is_skipped"] = False
 				status["failure_count"] = 0
 
 		
-		source = self.sources[handler_key]  # Remove the -1 since handler_key is already adjusted
+		source = self.sources[handler_key]
+
+		# ThreadPoolExecutor reuses OS threads. If a previous playwright call on this
+		# thread crashed without cleanly stopping its event loop, the thread's asyncio
+		# running-loop state (thread-local C variable) may still be set. Playwright's
+		# sync_playwright().__enter__ checks asyncio.get_running_loop() and raises
+		# "Sync API inside asyncio loop" if it finds one, causing instant handler failure.
+		# Reset it before every call so playwright always starts from a clean state.
+		import asyncio as _asyncio
+		try:
+			_asyncio.events._set_running_loop(None)
+		except Exception:
+			pass
 
 		try:
-			config = BrowserConfig()
-			config.docker_name = f"thread_id_{thread_id}"
-			config.starting_server_port_to_check = [10081 + (i*1000) for i in range(self.num_types)][handler_key]
-			config.starting_debug_port_to_check = [20224 + (i*1000) for i in range(self.num_types)][handler_key]
+			if not hasattr(self._thread_local, 'handler'):
+				self._thread_local.handler = None
+
+			# Initialize handler if not present or changed
+			if self._thread_local.handler is None or not isinstance(self._thread_local.handler, source):
+				if self._thread_local.handler:
+					try: self._thread_local.handler.cleanup()
+					except: pass
+				
+				docker_name = f"thread_id_{thread_id}"
+				# Kill any stale container from a previous failed run with the same name
+				# to free its ports before we try to allocate new ones.
+				import subprocess as _sp
+				_sp.run(["docker", "rm", "-f", docker_name], capture_output=True)
+
+				config = BrowserConfig()
+				config.docker_name = docker_name
+				neko_file_path = file_path
+
+				if source.__name__ == "MetaUIChat" or source.__name__ == "AIStudioUIChat":
+					neko_base_path = "/".join(file_path.split("/")[:5])
+					neko_file_path = "/".join(file_path.split("/")[5:])
+					# Set up additional docker flags
+					config.additionl_docker_flag = ' '.join(common.get_neko_additional_flags(neko_base_path, config))
+				
+				self._thread_local.handler = source(config=config)
+			
+			# Update path for current call if needed (for relative path logic)
 			neko_file_path = file_path
-
 			if source.__name__ == "MetaUIChat" or source.__name__ == "AIStudioUIChat":
-				neko_base_path = "/".join(file_path.split("/")[:5])
 				neko_file_path = "/".join(file_path.split("/")[5:])
-				# Set up additional docker flags
-				config.additionl_docker_flag = ' '.join(common.get_neko_additional_flags(neko_base_path, config))
 
-			src_obj = source(config=config)
-			result = src_obj.quick_chat(user_prompt=prompt, file_path=neko_file_path)
+			src_obj = self._thread_local.handler
+			result = src_obj.chat_fresh(user_prompt=prompt, file_path=neko_file_path)
 	
 			if not result or len(result.split(" ")) <= 40:
 				raise ValueError(f"Handler {handler_key} returned an invalid or empty result.")
@@ -433,7 +471,14 @@ class MultiTypeCaptionGenerator:
 			return result
 
 		except Exception as e:
-			logger_config.error(f"Type {type_id} (Handler {handler_key}) failed processing: {e}")
+			_log('error', f"[W{type_id}|H{handler_key}] Failed: {e}")
+			
+			# Force cleanup on error to ensure clean slate for next attempt
+			if hasattr(self._thread_local, 'handler') and self._thread_local.handler:
+				try: self._thread_local.handler.cleanup()
+				except: pass
+				self._thread_local.handler = None
+
 			# Penalize the handler on failure
 			with self.handler_lock:
 				status = self.handler_statuses[handler_key]
@@ -442,7 +487,7 @@ class MultiTypeCaptionGenerator:
 				if status["failure_count"] >= 3:
 					status["is_skipped"] = True
 					status["skip_until"] = time.time() + self.skip_duration
-					logger_config.error(f"Handler {handler_key} failed {status['failure_count']} times. Skipping for {self.skip_duration} seconds.")
+					_log('warning', f"[H{handler_key}] Failed {status['failure_count']} times — skipping for {self.skip_duration}s")
 			
 			# Re-raise the exception so the worker can handle it appropriately
 			raise
@@ -451,6 +496,17 @@ class MultiTypeCaptionGenerator:
 
 # Usage example and main execution
 if __name__ == "__main__":
+	import signal as _signal
+
+	def _exit_handler(signum, frame):
+		# os._exit skips Python cleanup (including ThreadPoolExecutor.shutdown(wait=True))
+		# so worker threads — which may be blocked on Docker/browser ops — don't hold
+		# the process alive. Exit code 130 = 128 + SIGINT(2), the Unix convention.
+		os._exit(130)
+
+	_signal.signal(_signal.SIGINT,  _exit_handler)
+	_signal.signal(_signal.SIGTERM, _exit_handler)
+
 	print(sys.argv)
 	extract_scenes_path = sys.argv[1]
 	cache_path = sys.argv[2]

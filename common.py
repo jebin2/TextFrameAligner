@@ -322,7 +322,8 @@ def get_chrome_policies_json_path():
     if file_exists(local_path):
         return local_path
 
-    target_path = f"temp_dir/policies.json"
+    target_path = os.path.abspath("temp_dir/policies.json")
+    os.makedirs(os.path.dirname(target_path), exist_ok=True)
     if file_exists(target_path):
         remove_file(target_path)
     
