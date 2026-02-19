@@ -409,33 +409,33 @@ class MultiTypeCaptionGenerator:
 		
 		source = self.sources[handler_key]
 
-		# ThreadPoolExecutor reuses OS threads. If a previous playwright call on this
-		# thread crashed without cleanly stopping its event loop, the thread's asyncio
-		# running-loop state (thread-local C variable) may still be set. Playwright's
-		# sync_playwright().__enter__ checks asyncio.get_running_loop() and raises
-		# "Sync API inside asyncio loop" if it finds one, causing instant handler failure.
-		# Reset it before every call so playwright always starts from a clean state.
 		import asyncio as _asyncio
-		try:
-			_asyncio.events._set_running_loop(None)
-		except Exception:
-			pass
+		import subprocess as _sp
 
 		try:
 			if not hasattr(self._thread_local, 'handler'):
 				self._thread_local.handler = None
 
-			# Initialize handler if not present or changed
+			# Initialize handler if not present or if it was cleaned up after a failure
 			if self._thread_local.handler is None or not isinstance(self._thread_local.handler, source):
 				if self._thread_local.handler:
 					try: self._thread_local.handler.cleanup()
 					except: pass
-				
+
+				# Only reset asyncio running-loop state when we're about to start a NEW
+				# playwright instance. Resetting it while an existing playwright session
+				# is active (dispatcher greenlet running) would corrupt the thread-local
+				# and risk confusing asyncio internals mid-session.
+				try:
+					_asyncio.events._set_running_loop(None)
+				except Exception:
+					pass
+
 				docker_name = f"thread_id_{thread_id}"
 				# Kill any stale container from a previous failed run with the same name
 				# to free its ports before we try to allocate new ones.
-				import subprocess as _sp
-				_sp.run(["docker", "rm", "-f", docker_name], capture_output=True)
+				_sp.run(["docker", "rm", "-f", docker_name],
+						stdout=_sp.DEVNULL, stderr=_sp.DEVNULL)
 
 				config = BrowserConfig()
 				config.docker_name = docker_name
