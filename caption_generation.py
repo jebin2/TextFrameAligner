@@ -499,6 +499,23 @@ if __name__ == "__main__":
 	import signal as _signal
 
 	def _exit_handler(signum, frame):
+		# Kill all Docker containers we launched (named thread_id_*) before
+		# os._exit() bypasses atexit handlers that would normally do docker kill.
+		try:
+			import subprocess as _subprocess
+			result = _subprocess.run(
+				["docker", "ps", "--format", "{{.Names}}"],
+				capture_output=True, text=True, timeout=5
+			)
+			names = [n for n in result.stdout.strip().splitlines() if n.startswith("thread_id_")]
+			if names:
+				_subprocess.run(
+					["docker", "rm", "-f"] + names,
+					stdout=_subprocess.DEVNULL, stderr=_subprocess.DEVNULL,
+					timeout=15
+				)
+		except Exception:
+			pass
 		# os._exit skips Python cleanup (including ThreadPoolExecutor.shutdown(wait=True))
 		# so worker threads — which may be blocked on Docker/browser ops — don't hold
 		# the process alive. Exit code 130 = 128 + SIGINT(2), the Unix convention.
