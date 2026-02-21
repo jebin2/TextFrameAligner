@@ -12,7 +12,7 @@ import torch
 import threading
 import time # Import time for skip logic
 import sys
-from chat_bot_ui_handler import GoogleAISearchChat, AIStudioUIChat, QwenUIChat, PerplexityUIChat, GeminiUIChat, GrokUIChat, MetaUIChat, CopilotUIChat, BingUIChat, MistralUIChat, PallyUIChat, MoonDream
+from chat_bot_ui_handler import GoogleAISearchChat, AIStudioUIChat, QwenUIChat, PerplexityUIChat, GeminiUIChat, GrokUIChat, MetaUIChat, CopilotUIChat, BingUIChat, MistralUIChat, PallyUIChat, MoonDream, BraveAISearch, DuckDuckGoAISearch
 
 # Serialize logger output so multi-line entries (message + separator) from
 # different threads never interleave.
@@ -29,7 +29,7 @@ class HandlerSkippedException(Exception):
 class MultiTypeCaptionGenerator:
 	def __init__(self, cache_path, num_types=12, FYI="", local_only=False, skip_duration_seconds=100):
 		self.cache_path = cache_path
-		self.sources = [GoogleAISearchChat, QwenUIChat, PerplexityUIChat, GeminiUIChat, MoonDream, GrokUIChat, MetaUIChat, CopilotUIChat, BingUIChat, MistralUIChat, PallyUIChat, GeminiUIChat, GoogleAISearchChat, BingUIChat, GeminiUIChat, GoogleAISearchChat, BingUIChat]
+		self.sources = [GoogleAISearchChat, QwenUIChat, BingUIChat, BraveAISearch, DuckDuckGoAISearch]
 		self.num_types = len(self.sources) + 1
 		self.lock = Lock()  # for safely updating temp JSON
 		self.model_lock = Lock()
