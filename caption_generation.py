@@ -122,7 +122,7 @@ class MultiTypeCaptionGenerator:
 			return None, temp_data
 
 	def _worker(self, prompt, extract_scenes_json, temp_path, type_id):
-		processed_count = 0
+		worker_processed_count = 0
 		thread_id = threading.current_thread().ident
 		handler_key = type_id if self.local_only else ((type_id - 1) % len(self.sources))
 		_log('info', f"[W{type_id}|H{handler_key}] Started on thread {thread_id}")
@@ -200,8 +200,8 @@ class MultiTypeCaptionGenerator:
 						temp_data[idx]["processed"] = True
 						temp_data[idx]["dialogue"] = dialogue
 						temp_data[idx]["frame_path"] = frame_path
-						processed_count += 1
-						_log('success', f"[W{type_id}] Frame {idx+1}/{len(extract_scenes_json)} done (session total: {processed_count})")
+						worker_processed_count += 1
+						_log('success', f"[W{type_id}] Frame {idx+1}/{len(extract_scenes_json)} done (W{type_id} done so far: {worker_processed_count})")
 					else:
 						temp_data[idx]["processed"] = False
 						_log('error', f"[W{type_id}] Frame {idx+1} returned no result")
@@ -258,7 +258,7 @@ class MultiTypeCaptionGenerator:
 				pass
 			self._thread_local.handler = None
 
-		_log('info', f"[W{type_id}] Finished — processed {processed_count} frames this session")
+		_log('info', f"[W{type_id}] Finished — processed {worker_processed_count} frames this session")
 
 	def caption_generation(self, extract_scenes_json):
 		self.num_frames = len(extract_scenes_json)
