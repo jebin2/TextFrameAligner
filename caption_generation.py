@@ -441,7 +441,7 @@ class MultiTypeCaptionGenerator:
 				config.docker_name = docker_name
 				neko_file_path = file_path
 
-				if source.__name__ == "MetaUIChat" or source.__name__ == "AIStudioUIChat":
+				if source.__name__ == "MetaUIChat" or source.__name__ == "AIStudioUIChat" or source.__name__ == "QwenUIChat":
 					neko_base_path = "/".join(file_path.split("/")[:5])
 					neko_file_path = "/".join(file_path.split("/")[5:])
 					# Set up additional docker flags
@@ -451,7 +451,7 @@ class MultiTypeCaptionGenerator:
 			
 			# Update path for current call if needed (for relative path logic)
 			neko_file_path = file_path
-			if source.__name__ == "MetaUIChat" or source.__name__ == "AIStudioUIChat":
+			if source.__name__ == "MetaUIChat" or source.__name__ == "AIStudioUIChat" or source.__name__ == "QwenUIChat":
 				neko_file_path = "/".join(file_path.split("/")[5:])
 
 			src_obj = self._thread_local.handler
