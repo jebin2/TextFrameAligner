@@ -680,42 +680,41 @@ class TextFrameAligner:
 							if not common.is_same_sentence(" ".join(all_recap), " ".join(sentences)):
 								raise ValueError("Sentence not similar")
 					except Exception as e:
-						if "Sentence not similar" in str(e):
-							try:
-								logger_config.info("Using GeminiWrapper fallback for Sentence not similar error")
-								import custom_env
-								geminiWrapper = GeminiWrapper(system_instruction=system_prompt, model_name=custom_env.MODEL_NAME)
-								model_responses = geminiWrapper.send_message(text, schema=genai.types.Schema(
-									type = genai.types.Type.OBJECT,
-									required = ["data"],
-									properties = {
-										"data": genai.types.Schema(
-											type = genai.types.Type.ARRAY,
-											items = genai.types.Schema(
-												type = genai.types.Type.OBJECT,
-												required = ["scene_caption", "recap_sentence"],
-												properties = {
-													"scene_caption": genai.types.Schema(
-														type = genai.types.Type.STRING,
-													),
-													"recap_sentence": genai.types.Schema(
-														type = genai.types.Type.STRING,
-													),
-												},
-											),
+						try:
+							logger_config.info("Using GeminiWrapper fallback for Sentence not similar error")
+							import custom_env
+							geminiWrapper = GeminiWrapper(system_instruction=system_prompt, model_name=custom_env.MODEL_NAME)
+							model_responses = geminiWrapper.send_message(text, schema=genai.types.Schema(
+								type = genai.types.Type.OBJECT,
+								required = ["data"],
+								properties = {
+									"data": genai.types.Schema(
+										type = genai.types.Type.ARRAY,
+										items = genai.types.Schema(
+											type = genai.types.Type.OBJECT,
+											required = ["scene_caption", "recap_sentence"],
+											properties = {
+												"scene_caption": genai.types.Schema(
+													type = genai.types.Type.STRING,
+												),
+												"recap_sentence": genai.types.Schema(
+													type = genai.types.Type.STRING,
+												),
+											},
 										),
-									},
-								))
-								match_scene = json.loads(model_responses[0])["data"]
-								all_recap = [sent["recap_sentence"] for sent in match_scene]
-								try:
-									all_recap[len(sentences) - 1]
-								except:
-									if not common.is_same_sentence(" ".join(all_recap), " ".join(sentences)):
-										raise ValueError("Sentence not similar")
-								continue
-							except Exception as ex:
-								e = ex
+									),
+								},
+							))
+							match_scene = json.loads(model_responses[0])["data"]
+							all_recap = [sent["recap_sentence"] for sent in match_scene]
+							try:
+								all_recap[len(sentences) - 1]
+							except:
+								if not common.is_same_sentence(" ".join(all_recap), " ".join(sentences)):
+									raise ValueError("Sentence not similar")
+							continue
+						except Exception as ex:
+							e = ex
 
 						common.send_desktop_notification("Failed match_scenes_online trying again")
 						match_scene = None
