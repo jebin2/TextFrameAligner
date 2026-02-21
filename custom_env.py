@@ -12,3 +12,4 @@ def _is_running_in_vm():
 isVM = _is_running_in_vm()
 
 OLLAMA_REQ_URL="http://172.28.156.132:11434" if isVM else "http://127.0.0.1:11434"
+MODEL_NAME = "gemini-3.1-pro-preview"
