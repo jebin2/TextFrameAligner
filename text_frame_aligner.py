@@ -995,7 +995,7 @@ class TextFrameAligner:
 		]
 
 		# If more than 100 subfolders, delete oldest ones
-		if len(subfolders) > 20000:
+		if len(subfolders) > 10:
 			# Sort by access time (oldest first)
 			subfolders.sort(key=lambda x: x[1])
 			folders_to_delete = subfolders[:-1]  # keep last 200
