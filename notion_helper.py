@@ -5,13 +5,7 @@ import json
 import logging
 import json_repair
 
-try:
-    from dotenv import load_dotenv
-    load_dotenv(os.path.join(os.path.dirname(__file__), '..', 'CaptionCreator', '.env'))
-except ImportError:
-    pass
-
-NOTION_API_KEY = os.environ.get("NOTION_API_KEY")
+NOTION_API_KEY = os.getenv("NOTION_API_KEY")
 PARENT_PAGE_ID = "3159a6c4-a97e-8097-8ef5-fd65ba5bfa07"
 
 logger = logging.getLogger(__name__)
