@@ -625,6 +625,26 @@ class TextFrameAligner:
 					json.dump([], f, indent=4)
 
 			if not match_scene:
+				# Check Notion before running Gemini
+				try:
+					import notion_helper
+					page_title = os.path.basename(cache_dir)
+					notion_result = notion_helper.check_for_result_in_notion(page_title)
+					if notion_result:
+						match_scene = notion_result
+						logger_config.info(f"Using match_scene from Notion: {page_title}")
+						logger_config.info(f"Notion Response: {match_scene}")
+						all_recap = [sent["recap_sentence"] for sent in match_scene]
+						try:
+							all_recap[len(sentences) - 1]
+						except:
+							if not common.is_same_sentence(" ".join(all_recap), " ".join(sentences)):
+								raise ValueError("Sentence not similar check already content from Notion")
+				except Exception as e:
+					logger_config.warning(f"Failed to check or validate Notion result: {str(e)}")
+					match_scene = None
+
+			if not match_scene:
 				text = f"""Scene Captions:: {captions}
 		Recap Sentences:: {sentences}"""
 				if allow_dup:
