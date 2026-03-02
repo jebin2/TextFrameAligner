@@ -310,7 +310,7 @@ def send_desktop_notification(text: str):
 def get_neko_additional_flags(neko_base_path, config):
     additional_flags = []
     additional_flags.append(f'-v {neko_base_path}:{config.neko_attach_folder}')
-    additional_flags.append(f'-v {get_chrome_policies_json_path()}:/etc/opt/chrome/policies/managed/policies.json')
+    additional_flags.append(config.policy_volume_mount(get_chrome_policies_json_path()))
     return additional_flags
 
 def get_chrome_policies_json_path():
