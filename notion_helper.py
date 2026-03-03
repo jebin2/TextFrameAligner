@@ -102,6 +102,18 @@ def update_or_create_notion_page(title, user_prompt, system_prompt):
     def create_rich_text(content):
         return [{"type": "text", "text": {"content": chunk}} for chunk in split_text_into_chunks(content)]
 
+    def append_text_blocks(blocks, content):
+        """Split content into multiple paragraph blocks if rich_text exceeds 100 items."""
+        chunks = split_text_into_chunks(content)
+        for i in range(0, len(chunks), 100):
+            blocks.append({
+                "object": "block",
+                "type": "paragraph",
+                "paragraph": {
+                    "rich_text": [{"type": "text", "text": {"content": c}} for c in chunks[i:i+100]]
+                }
+            })
+
     blocks = []
     
     blocks.append({
@@ -112,13 +124,7 @@ def update_or_create_notion_page(title, user_prompt, system_prompt):
         }
     })
     
-    blocks.append({
-        "object": "block",
-        "type": "paragraph",
-        "paragraph": {
-            "rich_text": create_rich_text(f"System Prompt: {system_prompt}")
-        }
-    })
+    append_text_blocks(blocks, f"System Prompt: {system_prompt}")
         
     blocks.append({
         "object": "block",
@@ -128,13 +134,7 @@ def update_or_create_notion_page(title, user_prompt, system_prompt):
         }
     })
 
-    blocks.append({
-        "object": "block",
-        "type": "paragraph",
-        "paragraph": {
-            "rich_text": create_rich_text(f"User Prompt: {user_prompt}")
-        }
-    })
+    append_text_blocks(blocks, f"User Prompt: {user_prompt}")
 
     saved_response_code = "[\n  // paste JSON here\n]"
 
@@ -214,7 +214,7 @@ def update_or_create_notion_page(title, user_prompt, system_prompt):
                 requests.patch(url, headers=get_headers(), json=payload)
 
 if __name__ == "__main__":
-    
+
     test_title = "test_cache_dir_1234"
     test_user_prompt = "[Scene 1, Scene 2]"
     test_system_prompt = "Match scenes to recap."
