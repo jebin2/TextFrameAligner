@@ -85,7 +85,7 @@ def check_for_result_in_notion(title):
     logger_config.info("No valid JSON result found in any Notion code block")
     return None
 
-def split_text_into_chunks(text, max_length=2000):
+def split_text_into_chunks(text, max_length=1900):
     return [text[i:i+max_length] for i in range(0, len(text), max_length)]
 
 def update_or_create_notion_page(title, user_prompt, system_prompt):
