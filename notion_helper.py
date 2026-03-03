@@ -17,7 +17,7 @@ def get_headers():
 
 def find_page_by_title(title):
     if not NOTION_API_KEY:
-        logger.warning("NOTION_API_KEY not found in environment.")
+        logger_config.warning("NOTION_API_KEY not found in environment.")
         return None
         
     url = "https://api.notion.com/v1/search"
@@ -28,11 +28,11 @@ def find_page_by_title(title):
             "property": "object"
         }
     }
-    logger.info(f"Calling Notion search API for: '{title}'")
+    logger_config.info(f"Calling Notion search API for: '{title}'")
     response = requests.post(url, headers=get_headers(), json=payload)
     if response.status_code == 200:
         results = response.json().get("results", [])
-        logger.info(f"Notion search returned {len(results)} results")
+        logger_config.info(f"Notion search returned {len(results)} results")
         for page in results:
             page_title = ""
             properties = page.get("properties", {})
@@ -41,11 +41,11 @@ def find_page_by_title(title):
             if title_arr:
                 page_title = title_arr[0].get("plain_text", "")
             if page_title == title:
-                logger.info(f"✅ Exact title match found: '{page_title}'")
+                logger_config.info(f"✅ Exact title match found: '{page_title}'")
                 return page
-        logger.info(f"No exact title match among {len(results)} results")
+        logger_config.info(f"No exact title match among {len(results)} results")
     else:
-        logger.error(f"Notion search API failed: {response.status_code} - {response.text}")
+        logger_config.error(f"Notion search API failed: {response.status_code} - {response.text}")
     return None
 
 def check_for_result_in_notion(title):
@@ -53,36 +53,36 @@ def check_for_result_in_notion(title):
     Checks if a page exists in Notion under the parent page with the exact title.
     If it exists, looks for a code block containing JSON and parses it.
     """
-    logger.info(f"Searching Notion for page with title: '{title}'")
+    logger_config.info(f"Searching Notion for page with title: '{title}'")
     page = find_page_by_title(title)
     if not page:
-        logger.info(f"No page found in Notion with title: '{title}'")
+        logger_config.info(f"No page found in Notion with title: '{title}'")
         return None
     
     page_id = page["id"]
-    logger.info(f"Found Notion page: {page_id}, fetching blocks...")
+    logger_config.info(f"Found Notion page: {page_id}, fetching blocks...")
     # Get blocks
     url = f"https://api.notion.com/v1/blocks/{page_id}/children"
     response = requests.get(url, headers=get_headers())
     if response.status_code == 200:
         blocks = response.json().get("results", [])
-        logger.info(f"Fetched {len(blocks)} blocks from Notion page")
+        logger_config.info(f"Fetched {len(blocks)} blocks from Notion page")
         for i, block in enumerate(blocks):
             if block["type"] == "code":
                 code_text = "".join([t["plain_text"] for t in block["code"]["rich_text"]])
-                logger.info(f"Found code block (block {i+1}/{len(blocks)}), length: {len(code_text)} chars, attempting JSON parse...")
+                logger_config.info(f"Found code block (block {i+1}/{len(blocks)}), length: {len(code_text)} chars, attempting JSON parse...")
                 try:
                     result = json_repair.loads(code_text)
                     if result:
-                        logger.info(f"✅ Successfully parsed JSON from Notion code block ({len(result)} items)")
+                        logger_config.info(f"✅ Successfully parsed JSON from Notion code block ({len(result)} items)")
                         return result
                     else:
-                        logger.info("Parsed JSON but result is empty/falsy")
+                        logger_config.info("Parsed JSON but result is empty/falsy")
                 except Exception as e:
-                    logger.warning(f"Found code block but couldn't parse JSON: {e}")
+                    logger_config.warning(f"Found code block but couldn't parse JSON: {e}")
     else:
-        logger.warning(f"Failed to fetch blocks from Notion: {response.status_code} - {response.text}")
-    logger.info("No valid JSON result found in any Notion code block")
+        logger_config.warning(f"Failed to fetch blocks from Notion: {response.status_code} - {response.text}")
+    logger_config.info("No valid JSON result found in any Notion code block")
     return None
 
 def split_text_into_chunks(text, max_length=2000):
@@ -94,7 +94,7 @@ def update_or_create_notion_page(title, user_prompt, system_prompt):
     Used for appending the request details on failure.
     """
     if not NOTION_API_KEY:
-        logger.warning("NOTION_API_KEY not found in environment.")
+        logger_config.warning("NOTION_API_KEY not found in environment.")
         return None
         
     page = find_page_by_title(title)
@@ -188,7 +188,7 @@ def update_or_create_notion_page(title, user_prompt, system_prompt):
             payload = {"children": blocks[i:i+100]}
             res = requests.patch(url_patch, headers=get_headers(), json=payload)
             if res.status_code != 200:
-                logger.error(f"Failed to update Notion page: {res.text}")
+                logger_config.error(f"Failed to update Notion page: {res.text}")
     else:
         # Create new page
         url = "https://api.notion.com/v1/pages"
@@ -203,7 +203,7 @@ def update_or_create_notion_page(title, user_prompt, system_prompt):
         }
         res = requests.post(url, headers=get_headers(), json=payload)
         if res.status_code != 200:
-            logger.error(f"Failed to create Notion page: {res.text}")
+            logger_config.error(f"Failed to create Notion page: {res.text}")
             
         # Append remaining blocks if any
         if len(blocks) > 100 and res.status_code == 200:
@@ -214,23 +214,21 @@ def update_or_create_notion_page(title, user_prompt, system_prompt):
                 requests.patch(url, headers=get_headers(), json=payload)
 
 if __name__ == "__main__":
-    # Configure logging
-    logging.basicConfig(level=logging.INFO)
     
     test_title = "test_cache_dir_1234"
     test_user_prompt = "[Scene 1, Scene 2]"
     test_system_prompt = "Match scenes to recap."
     
     # 1. Simulate failure -> Create page
-    logger.info(f"Simulating failure, updating/creating page: {test_title}")
+    logger_config.info(f"Simulating failure, updating/creating page: {test_title}")
     update_or_create_notion_page(test_title, test_user_prompt, test_system_prompt)
-    logger.info("Page should be created. Check Notion!")
+    logger_config.info("Page should be created. Check Notion!")
     
     # 2. Simulate reading back (Wait for user to manually add JSON in Notion)
-    logger.info(f"Let's see if we can find the page and parse any JSON: {test_title}")
+    logger_config.info(f"Let's see if we can find the page and parse any JSON: {test_title}")
     result = check_for_result_in_notion(test_title)
     if result:
-        logger.info("Successfully read result from Notion:")
+        logger_config.info("Successfully read result from Notion:")
         print(json.dumps(result, indent=4))
     else:
-        logger.info("No valid JSON result found in Notion yet (or page not found).")
+        logger_config.info("No valid JSON result found in Notion yet (or page not found).")
