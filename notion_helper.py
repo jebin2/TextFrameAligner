@@ -51,25 +51,36 @@ def check_for_result_in_notion(title):
     Checks if a page exists in Notion under the parent page with the exact title.
     If it exists, looks for a code block containing JSON and parses it.
     """
+    logger.info(f"Searching Notion for page with title: '{title}'")
     page = find_page_by_title(title)
     if not page:
+        logger.info(f"No page found in Notion with title: '{title}'")
         return None
-        
+    
     page_id = page["id"]
+    logger.info(f"Found Notion page: {page_id}, fetching blocks...")
     # Get blocks
     url = f"https://api.notion.com/v1/blocks/{page_id}/children"
     response = requests.get(url, headers=get_headers())
     if response.status_code == 200:
         blocks = response.json().get("results", [])
-        for block in blocks:
+        logger.info(f"Fetched {len(blocks)} blocks from Notion page")
+        for i, block in enumerate(blocks):
             if block["type"] == "code":
                 code_text = "".join([t["plain_text"] for t in block["code"]["rich_text"]])
+                logger.info(f"Found code block (block {i+1}/{len(blocks)}), length: {len(code_text)} chars, attempting JSON parse...")
                 try:
                     result = json_repair.loads(code_text)
                     if result:
+                        logger.info(f"✅ Successfully parsed JSON from Notion code block ({len(result)} items)")
                         return result
+                    else:
+                        logger.info("Parsed JSON but result is empty/falsy")
                 except Exception as e:
                     logger.warning(f"Found code block but couldn't parse JSON: {e}")
+    else:
+        logger.warning(f"Failed to fetch blocks from Notion: {response.status_code} - {response.text}")
+    logger.info("No valid JSON result found in any Notion code block")
     return None
 
 def split_text_into_chunks(text, max_length=2000):

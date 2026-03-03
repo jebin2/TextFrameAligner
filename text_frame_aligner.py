@@ -628,19 +628,28 @@ class TextFrameAligner:
 				logger_config.info("No cached match_scene found, checking Notion")
 				# Check Notion before running Gemini
 				try:
+					logger_config.info("Importing notion_helper module")
 					import notion_helper
 					page_title = os.path.basename(cache_dir)
+					logger_config.info(f"Searching Notion for page: '{page_title}'")
 					notion_result = notion_helper.check_for_result_in_notion(page_title)
 					if notion_result:
 						match_scene = notion_result
-						logger_config.info(f"Using match_scene from Notion: {page_title}")
+						logger_config.info(f"✅ Found match_scene in Notion: {page_title} ({len(match_scene)} entries)")
 						logger_config.info(f"Notion Response: {match_scene}")
+						logger_config.info("Validating Notion result: extracting recap_sentences")
 						all_recap = [sent["recap_sentence"] for sent in match_scene]
+						logger_config.info(f"Notion has {len(all_recap)} recap sentences, expected {len(sentences)}")
 						try:
 							all_recap[len(sentences) - 1]
+							logger_config.info("✅ Notion result sentence count matches expected")
 						except:
+							logger_config.info("Sentence count mismatch, checking similarity")
 							if not common.is_same_sentence(" ".join(all_recap), " ".join(sentences)):
 								raise ValueError("Sentence not similar check already content from Notion")
+							logger_config.info("✅ Sentences are similar enough, accepting Notion result")
+					else:
+						logger_config.info("No match_scene found in Notion")
 				except Exception as e:
 					logger_config.warning(f"Failed to check or validate Notion result: {str(e)}")
 					match_scene = None
