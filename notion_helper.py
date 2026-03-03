@@ -2,13 +2,11 @@ import os
 import sys
 import requests
 import json
-import logging
 import json_repair
+from custom_logger import logger_config
 
 NOTION_API_KEY = os.getenv("NOTION_API_KEY")
 PARENT_PAGE_ID = "3159a6c4-a97e-8097-8ef5-fd65ba5bfa07"
-
-logger = logging.getLogger(__name__)
 
 def get_headers():
     return {
