@@ -625,6 +625,7 @@ class TextFrameAligner:
 					json.dump([], f, indent=4)
 
 			if not match_scene:
+				logger_config.info("No cached match_scene found, checking Notion")
 				# Check Notion before running Gemini
 				try:
 					import notion_helper
@@ -645,6 +646,7 @@ class TextFrameAligner:
 					match_scene = None
 
 			if not match_scene:
+				logger_config.info("No match_scene found, running Gemini")
 				text = f"""Scene Captions:: {captions}
 		Recap Sentences:: {sentences}"""
 				if allow_dup:
