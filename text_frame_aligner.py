@@ -624,14 +624,24 @@ class TextFrameAligner:
 				with open(cache_dir, "w") as f:
 					json.dump([], f, indent=4)
 
+			text = f"""Scene Captions:: {captions}
+	Recap Sentences:: {sentences}"""
+			if allow_dup:
+				with open("scene_matching_system_prompt_dup.md", 'r') as file:
+					system_prompt = file.read()
+			else:
+				with open("scene_matching_system_prompt.md", 'r') as file:
+					system_prompt = file.read()
 			if not match_scene:
 				logger_config.info("No cached match_scene found, checking Notion")
+
 				# Check Notion before running Gemini
 				try:
 					logger_config.info("Importing notion_helper module")
 					import notion_helper
 					page_title = os.path.basename(cache_dir)
 					logger_config.info(f"Searching Notion for page: '{page_title}'")
+					notion_helper.update_or_create_notion_page(page_title, text, system_prompt)
 					notion_result = notion_helper.check_for_result_in_notion(page_title)
 					if notion_result:
 						match_scene = notion_result
@@ -656,14 +666,6 @@ class TextFrameAligner:
 
 			if not match_scene:
 				logger_config.info("No match_scene found, running Gemini")
-				text = f"""Scene Captions:: {captions}
-		Recap Sentences:: {sentences}"""
-				if allow_dup:
-					with open("scene_matching_system_prompt_dup.md", 'r') as file:
-						system_prompt = file.read()
-				else:
-					with open("scene_matching_system_prompt.md", 'r') as file:
-						system_prompt = file.read()
 
 				with open(prompt_cache_dir, "w", encoding="utf-8") as f:
 					f.write(text)
