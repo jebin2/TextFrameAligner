@@ -124,7 +124,7 @@ def update_or_create_notion_page(title, user_prompt, system_prompt):
         }
     })
     
-    append_text_blocks(blocks, f"System Prompt: {system_prompt}")
+    append_text_blocks(blocks, f"{system_prompt}")
         
     blocks.append({
         "object": "block",
@@ -134,7 +134,7 @@ def update_or_create_notion_page(title, user_prompt, system_prompt):
         }
     })
 
-    append_text_blocks(blocks, f"User Prompt: {user_prompt}")
+    append_text_blocks(blocks, f"{user_prompt}")
 
     saved_response_code = "[\n  // paste JSON here\n]"
 
