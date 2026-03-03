@@ -30,9 +30,11 @@ def find_page_by_title(title):
             "property": "object"
         }
     }
+    logger.info(f"Calling Notion search API for: '{title}'")
     response = requests.post(url, headers=get_headers(), json=payload)
     if response.status_code == 200:
         results = response.json().get("results", [])
+        logger.info(f"Notion search returned {len(results)} results")
         for page in results:
             page_title = ""
             properties = page.get("properties", {})
@@ -41,9 +43,11 @@ def find_page_by_title(title):
             if title_arr:
                 page_title = title_arr[0].get("plain_text", "")
             if page_title == title:
+                logger.info(f"✅ Exact title match found: '{page_title}'")
                 return page
+        logger.info(f"No exact title match among {len(results)} results")
     else:
-        logger.error(f"Notion search API failed: {response.text}")
+        logger.error(f"Notion search API failed: {response.status_code} - {response.text}")
     return None
 
 def check_for_result_in_notion(title):
