@@ -16,4 +16,3 @@ json_repair
 ultralytics
 git+https://github.com/huggingface/transformers.git
 requests
-git+https://github.com/jebin2/gemiwrap.git

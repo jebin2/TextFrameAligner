@@ -3,12 +3,12 @@ load_env()
 
 import os
 import json
-from moondream2 import Moondream2
+
 from concurrent.futures import ThreadPoolExecutor
 from threading import Lock
 from custom_logger import logger_config
 import common
-import torch
+
 import threading
 import time # Import time for skip logic
 import sys
@@ -27,19 +27,16 @@ class HandlerSkippedException(Exception):
 	pass
 
 class MultiTypeCaptionGenerator:
-	def __init__(self, cache_path, num_types=12, FYI="", local_only=False, skip_duration_seconds=100):
+	def __init__(self, cache_path, num_types=12, FYI="", skip_duration_seconds=100):
 		self.cache_path = cache_path
 		self.sources = [GoogleAISearchChat, QwenUIChat, BingUIChat, BraveAISearch, DuckDuckGoAISearch]
 		self.num_types = len(self.sources) + 1
 		self.lock = Lock()  # for safely updating temp JSON
-		self.model_lock = Lock()
-		self.handler_lock = Lock() # NEW: Lock for handler statuses
-		self.model = None
+		self.handler_lock = Lock() # Lock for handler statuses
 		self.FYI = FYI
-		self.local_only = local_only
 		self.skip_duration = skip_duration_seconds # Duration to skip a failing handler
 
-		# Thread-local storage for models
+		# Thread-local storage for handlers
 		self._thread_local = threading.local()
 
 		# --- NEW: Handler Ranking/Skipping State ---
@@ -52,32 +49,7 @@ class MultiTypeCaptionGenerator:
 		}
 		# -------------------------------------------
 
-	def _get_thread_model(self):
-		"""Get or create a model instance for the current thread"""
-		if not hasattr(self._thread_local, 'model') or self._thread_local.model is None:
-			with self.model_lock:
-				thread_id = threading.current_thread().ident
-				_log('info', f"[Thread {thread_id}] Initializing model...")
-				try:
-					if common.is_gpu_available():
-						torch.cuda.empty_cache()
-						torch.cuda.synchronize()
 
-					os.environ["PYTORCH_CUDA_ALLOC_CONF"] = "max_split_size_mb:512"
-					os.environ["CUDA_LAUNCH_BLOCKING"] = "1"
-
-					self._thread_local.model = Moondream2()
-					_log('success', f"[Thread {thread_id}] Model initialized")
-				except Exception as e:
-					_log('error', f"[Thread {thread_id}] Model init failed: {e}")
-					self._thread_local.model = None
-					raise
-
-		return self._thread_local.model
-
-	def _load_moondream2(self):
-		"""Thread-safe model loading - now uses thread-local storage"""
-		return self._get_thread_model()
 
 	def _load_temp(self, temp_path):
 		if os.path.exists(temp_path):
@@ -124,38 +96,29 @@ class MultiTypeCaptionGenerator:
 	def _worker(self, prompt, extract_scenes_json, temp_path, type_id):
 		worker_processed_count = 0
 		thread_id = threading.current_thread().ident
-		handler_key = type_id if self.local_only else ((type_id - 1) % len(self.sources))
+		handler_key = (type_id - 1) % len(self.sources)
 		_log('info', f"[W{type_id}|H{handler_key}] Started on thread {thread_id}")
-
-		if common.is_gpu_available() and not self.local_only:
-			try:
-				device_id = type_id % torch.cuda.device_count()
-				torch.cuda.set_device(device_id)
-				_log('info', f"[W{type_id}] Using GPU {device_id}")
-			except Exception as e:
-				_log('warning', f"[W{type_id}] Could not set CUDA device: {e}")
 		
 		while True:
-			# --- NEW: Proactively check if the handler is skipped and pause the worker ---
-			if not self.local_only: # This logic only applies to non-local handlers
-				skip_time = None
-				with self.handler_lock:
-					status = self.handler_statuses[handler_key]
-					if status["is_skipped"]:
-						remaining_skip_time = status["skip_until"] - time.time()
-						if remaining_skip_time > 0:
-							skip_time = remaining_skip_time
-						else:
-							# If time is up, reactivate the handler
-							_log('info', f"[H{handler_key}] Reactivating after skip period")
-							status["is_skipped"] = False
-							status["failure_count"] = 0
+			# --- Proactively check if the handler is skipped and pause the worker ---
+			skip_time = None
+			with self.handler_lock:
+				status = self.handler_statuses[handler_key]
+				if status["is_skipped"]:
+					remaining_skip_time = status["skip_until"] - time.time()
+					if remaining_skip_time > 0:
+						skip_time = remaining_skip_time
+					else:
+						# If time is up, reactivate the handler
+						_log('info', f"[H{handler_key}] Reactivating after skip period")
+						status["is_skipped"] = False
+						status["failure_count"] = 0
 
-				# 🔑 do the waiting *after* releasing the lock
-				if skip_time:
-					_log('warning', f"[W{type_id}|H{handler_key}] Paused — handler skipped for {skip_time:.0f}s more")
-					time.sleep(skip_time + 1)
-					continue
+			# 🔑 do the waiting *after* releasing the lock
+			if skip_time:
+				_log('warning', f"[W{type_id}|H{handler_key}] Paused — handler skipped for {skip_time:.0f}s more")
+				time.sleep(skip_time + 1)
+				continue
 
 			result_tuple = self._get_next_index(temp_path)
 			if result_tuple[0] is None:
@@ -178,18 +141,9 @@ class MultiTypeCaptionGenerator:
 			_log('info', f"[W{type_id}] Processing frame {idx+1}/{len(extract_scenes_json)}")
 
 			try:
-				result = None
-				if common.get_device() == "cuda" and (type_id % self.num_types == 0 or self.local_only):
-					model = self._load_moondream2()
-					if model:
-						result = model.generate(frame_path, prompt)
-					else:
-						_log('error', f"[W{type_id}] Model not available")
-						result = None
-				else:
-					new_prompt = f"""{prompt} Also identify all the characters name in this frame. Keep your description to exactly 100 words or fewer.
+				new_prompt = f"""{prompt} Also identify all the characters name in this frame. Keep your description to exactly 100 words or fewer.
 	{self.FYI}"""
-					result = self.search_in_ui_type(type_id, new_prompt, frame_path, thread_id)
+				result = self.search_in_ui_type(type_id, new_prompt, frame_path, thread_id)
 
 
 				with self.lock:
@@ -223,19 +177,7 @@ class MultiTypeCaptionGenerator:
 			except Exception as e:
 				_log('error', f"[W{type_id}] Error on frame {idx}: {e}")
 				
-				if ("meta tensor" in str(e) or "Cannot copy out" in str(e) or 
-					"meta is not on the expected device" in str(e) or 
-					"CUDA" in str(e) or "device" in str(e).lower()):
-					_log('warning', f"[W{type_id}] Device/model error detected — clearing thread-local model")
-					if hasattr(self._thread_local, 'model'):
-						try:
-							del self._thread_local.model
-						except:
-							pass
-						self._thread_local.model = None
-					if common.is_gpu_available():
-						torch.cuda.empty_cache()
-						torch.cuda.synchronize()
+
 				
 				with self.lock:
 					temp_data = self._load_temp(temp_path)
@@ -244,11 +186,7 @@ class MultiTypeCaptionGenerator:
 					with open(temp_path, "w") as f:
 						json.dump(temp_data, f, indent=4)
 		
-		if hasattr(self._thread_local, 'model') and self._thread_local.model is not None:
-			_log('info', f"[W{type_id}] Cleaning up thread-local model")
-			del self._thread_local.model
-			if common.is_gpu_available():
-				torch.cuda.empty_cache()
+
 		
 		if hasattr(self._thread_local, 'handler') and self._thread_local.handler is not None:
 			_log('info', f"[W{type_id}] Cleaning up thread-local handler")
@@ -338,10 +276,8 @@ class MultiTypeCaptionGenerator:
 
 		prompt = "Describe what is happening in this video frame as if you're telling a story. Focus on the main subjects, their actions, the setting, and any important details."
 
-		effective_workers = 1 if self.local_only else self.num_types
-		_log('info', f"Launching {effective_workers} worker(s) (local_only={self.local_only})")
-		if self.local_only:
-			_log('info', "Memory optimization: single thread to avoid loading multiple models")
+		effective_workers = self.num_types
+		_log('info', f"Launching {effective_workers} worker(s)")
 
 		with ThreadPoolExecutor(max_workers=effective_workers) as executor:
 			futures = []
@@ -377,14 +313,7 @@ class MultiTypeCaptionGenerator:
 			
 		_log('success', f"All captions saved to {cache_dir}")
 		
-		if hasattr(self, 'model') and self.model:
-			del self.model
-		if hasattr(self, '_thread_local') and self._thread_local:
-			del self._thread_local
-			
-		if common.is_gpu_available():
-			torch.cuda.empty_cache()
-		
+
 		return captions
 
 	def search_in_ui_type(self, type_id, prompt, file_path, thread_id):
@@ -533,13 +462,8 @@ if __name__ == "__main__":
 	if len(sys.argv) > 3:
 		FYI = sys.argv[3]
 
-	local_only = False
-	if len(sys.argv) > 4:
-		# Convert the string argument to a boolean
-		local_only = sys.argv[4].lower() in ('true', '1', 't')
-
 	# Example usage
-	captionGen = MultiTypeCaptionGenerator(cache_path=cache_path, FYI=FYI, local_only=local_only)
+	captionGen = MultiTypeCaptionGenerator(cache_path=cache_path, FYI=FYI)
 
 	with open(extract_scenes_path, "r") as f:
 		data = json.load(f)

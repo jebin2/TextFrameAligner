@@ -294,22 +294,15 @@ class TextFrameAligner:
 		times = []
 		# prompt = "What are these?"
 		prompt = "Describe what is happening in this video frame as if you're telling a story. Focus on the main subjects, their actions, the setting, and any important details that would help someone understand the scene's context."
-		from moondream2 import Moondream2
-		from llava_one_vision import LlavaOneVision
-		with Moondream2() as vision_model:
-			for i in range(len(extract_scenes_json)):
-				if i in already_processed:
-					continue  # Skip already cached
+		for i in range(len(extract_scenes_json)):
+			if i in already_processed:
+				continue  # Skip already cached
 
-				start_time = time.time()
-				file_path = extract_scenes_json[i]["frame_path"][0]
-				result = None
-				result = self.search_in_ui(f"{prompt} Keep your description to exactly 100 words or fewer.", file_path)
+			start_time = time.time()
+			file_path = extract_scenes_json[i]["frame_path"][0]
+			result = self.search_in_ui(f"{prompt} Keep your description to exactly 100 words or fewer.", file_path)
 
-				if not result:
-					with Image.open(file_path) as img:
-						result = vision_model.generate(resize_to_480p(img), prompt)
-
+			if result:
 				captions.append({
 					"scene_caption":result.lower(),
 					"scene_dialogue":extract_scenes_json[i]["dialogue"]
@@ -320,17 +313,17 @@ class TextFrameAligner:
 				with open(partial_path, "w") as f:
 					json.dump(result, f, indent=4)
 
-				# Estimate duration
-				elapsed = time.time() - start_time
-				times.append(elapsed)
-				avg_time = sum(times) / len(times)
-				remaining = avg_time * (len(extract_scenes_json) - i)
-				eta = time.strftime("%H:%M:%S", time.gmtime(remaining))
+			# Estimate duration
+			elapsed = time.time() - start_time
+			times.append(elapsed)
+			avg_time = sum(times) / len(times)
+			remaining = avg_time * (len(extract_scenes_json) - i)
+			eta = time.strftime("%H:%M:%S", time.gmtime(remaining))
 
-				logger_config.info(
-					f"Caption Processed {i+1}/{len(extract_scenes_json)} | ETA: {eta}",
-					overwrite=True
-				)
+			logger_config.info(
+				f"Caption Processed {i+1}/{len(extract_scenes_json)} | ETA: {eta}",
+				overwrite=True
+			)
 
 		# Save final combined captions
 		with open(cache_dir, "w") as f:
@@ -571,36 +564,6 @@ class TextFrameAligner:
 		common.manage_gpu(action="clear_cache")
 		return sentences
 
-		sentences = []
-		from llm_chat import ChatService
-		chat_service = ChatService()
-		with open("sentence_split_system_prompt.md", 'r') as file:
-			system_prompt = file.read()
-
-		for attempt in range(5):
-			try:
-				model_response = chat_service.generate_response(
-					user_prompt=text,
-					system_message=system_prompt
-				)
-				sentences = json_repair.loads(model_response)
-				joined_processed = " ".join(sentences).strip()
-
-				if "<unused" in joined_processed or not self.is_same_sentence(joined_processed, text):
-					raise ValueError("sentences is not correct")
-
-				# success → break out
-				break
-			except Exception as e:
-				if attempt >= 4:
-					raise e
-		chat_service.unload_modal()
-
-		logger_config.info(f"Generated {len(sentences)} sentences")
-		with open(cache_dir, 'w') as f:
-			json.dump(sentences, f, indent=4)
-		return sentences
-
 	def match_scenes_online(self, captions, sentences, extract_scenes_json, allow_dup):
 		"""Optimized scene extraction"""
 		match_scene = None
@@ -668,10 +631,11 @@ class TextFrameAligner:
 					# Check Notion before trying Gemini
 					try:
 						logger_config.info("Checking Notion for result...")
-						import notion_helper
+						from jebin_lib import NotionClient
 						page_title = os.path.basename(cache_dir)
-						notion_helper.update_or_create_notion_page(page_title, text, system_prompt)
-						notion_result = notion_helper.check_for_result_in_notion(page_title)
+						notion = NotionClient()
+						notion.upsert_page(page_title, text, system_prompt)
+						notion_result = notion.read_json_result(page_title)
 						if notion_result:
 							match_scene = notion_result
 							logger_config.info(f"✅ Found match_scene in Notion: {page_title} ({len(match_scene)} entries)")
