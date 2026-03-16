@@ -13,6 +13,7 @@ import threading
 import time # Import time for skip logic
 import sys
 from chat_bot_ui_handler import GoogleAISearchChat, AIStudioUIChat, QwenUIChat, PerplexityUIChat, GeminiUIChat, GrokUIChat, MetaUIChat, CopilotUIChat, BingUIChat, MistralUIChat, PallyUIChat, MoonDream, BraveAISearch, DuckDuckGoAISearch
+from browser_manager.browser_config import BrowserConfig
 
 # Serialize logger output so multi-line entries (message + separator) from
 # different threads never interleave.
@@ -316,10 +317,7 @@ class MultiTypeCaptionGenerator:
 
 		return captions
 
-	def search_in_ui_type(self, type_id, prompt, file_path, thread_id):
-		from browser_manager.browser_config import BrowserConfig
-		import os
-		
+	def search_in_ui_type(self, type_id, prompt, file_path, thread_id):		
 		# Fix: Use consistent handler indexing
 		handler_key = (type_id - 1) % len(self.sources)
 		
